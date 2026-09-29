@@ -1,47 +1,38 @@
-
 name: Build Windows MSI
-
 on:
   workflow_dispatch:
-
 jobs:
   build:
     runs-on: windows-latest
-
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up JDK 21
-        uses: actions/setup-java@v4
+      - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '21'
-
-      - name: Compile
+      - name: Compile and verify
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Force out-win | Out-Null
-          if (!(Test-Path 'src/VtxApp.java')) { throw 'Missing src/VtxApp.java' }
-          javac -d out-win src/VtxApp.java
-          if ($LASTEXITCODE -ne 0) { throw 'Java compilation failed' }
-          jar --create --file out-win/VtxConfig.jar --main-class VtxApp -C out-win .
+          if (!(Test-Path src/VtxApp.java)) { throw 'Missing src/VtxApp.java' }
+          javac -encoding UTF-8 -d out-win src/VtxApp.java
+          if ($LASTEXITCODE -ne 0) { throw 'Compilation failed' }
+          if (!(Test-Path out-win/VtxApp.class)) { throw 'Missing VtxApp.class' }
+          jar --create --file VtxConfig.jar --main-class VtxApp -C out-win .
           if ($LASTEXITCODE -ne 0) { throw 'JAR creation failed' }
-          if ((Get-Item out-win/VtxConfig.jar).Length -lt 5000) { throw 'JAR is unexpectedly small' }
-
-      - name: Package MSI
+          if ((Get-Item VtxConfig.jar).Length -lt 15000) { throw 'JAR unexpectedly small' }
+          New-Item -ItemType Directory -Force package-input | Out-Null
+          Copy-Item VtxConfig.jar package-input/
+      - name: Build MSI
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          New-Item -ItemType Directory -Force dist-win | Out-Null
-          jpackage --type msi --name VtxConfig --input out-win --main-jar VtxConfig.jar --dest dist-win --app-version 1.0.1 --win-shortcut --win-menu --win-dir-chooser --java-options '-Xmx256m'
-          if ($LASTEXITCODE -ne 0) { throw 'MSI packaging failed' }
-          if (!(Get-ChildItem dist-win/*.msi)) { throw 'MSI was not created' }
-
-      - name: Upload MSI
-        uses: actions/upload-artifact@v4
+          jpackage --type msi --name VtxConfig --input package-input --main-jar VtxConfig.jar --dest dist-win --app-version 2.0.0 --win-shortcut --win-menu --win-dir-chooser --java-options '-Xmx512m'
+          if ($LASTEXITCODE -ne 0) { throw 'MSI build failed' }
+          if (!(Get-ChildItem dist-win/*.msi)) { throw 'MSI not created' }
+      - uses: actions/upload-artifact@v4
         with:
-          name: VtxConfig-Windows-MSI
+          name: VtxConfig-2-Windows-MSI
           path: dist-win/*.msi
           if-no-files-found: error
-  
