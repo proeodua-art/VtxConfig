@@ -119,7 +119,8 @@ public class VtxApp extends JFrame {
         fcBar.add(btn("ІМПОРТ ДАМПА",this::importFcDump));
         fcBar.add(btn("ПЕРЕГЛЯД ЗМІН",this::previewFcChanges));
         fcBar.add(btn("ЗЧИТАТИ FC І ПОРІВНЯТИ",this::compareLiveFc));
-        fcBar.add(btn("ПЕРЕВІРКА ПЕРЕД ЗАПИСОМ",this::preflightFc));
+        fcBar.add(btn("ПЕРЕВІРИТИ VTX-ТАБЛИЦЮ",this::inspectVtxTable));
+         fcBar.add(btn("ПЕРЕВІРКА ПЕРЕД ЗАПИСОМ",this::preflightFc));
         fcBar.add(btn("Відправити на FC",this::sendToFc));
         rightTop.add(fcBar,BorderLayout.SOUTH);
         right.add(rightTop,BorderLayout.NORTH);
@@ -506,7 +507,7 @@ RX — протоколи
         try{
             if(Files.size(file.toPath())>5_000_000)throw new IOException("Файл завеликий (максимум 5 МБ).");
             String dump=Files.readString(file.toPath(),StandardCharsets.UTF_8);
-            String report=analyzeFcDump(dump,collect());
+            String report=analyzeFcDump(dump,collect())+"\n"+inspectVtxTableReport(dump);
             importedDump=dump; importedDumpName=file.getName();
             JTextArea area=new JTextArea(report,26,76);
             area.setEditable(false);area.setFont(new Font(Font.MONOSPACED,Font.PLAIN,13));
@@ -713,11 +714,107 @@ RX — протоколи
                 else b.append("[!] UART").append(id+1).append("\n    Імпорт: ").append(a==null?"відсутній":a).append("\n    Зараз:  ").append(z==null?"відсутній":z).append("\n");
             }
         }else b.append("\nІмпортований dump відсутній: порівняння з файлом пропущено.\n");
+        b.append("\nПЕРЕВІРКА VTX-ТАБЛИЦІ (ЛИШЕ ЧИТАННЯ)\n").append(inspectVtxTableReport(live));
+        if(old!=null){
+            String a=canonicalVtxTable(old),z=canonicalVtxTable(live);
+            b.append("\nПОРІВНЯННЯ VTX-ТАБЛИЦЬ: ").append(a.isEmpty()||z.isEmpty()?"[?] таблиця відсутня у дампі":a.equals(z)?"[OK] без змін":"[!] таблиці відрізняються").append("\n");
+        }
         b.append("\nПЕРЕГЛЯД ПРОПОНОВАНИХ ЗМІН\n");
         try{b.append(buildChangePreview(live,config,"АКТУАЛЬНИЙ FC"));}
         catch(Exception e){b.append("Неможливо побудувати попередній перегляд: ").append(e.getMessage());}
         b.append("\n\nНІЧОГО НЕ ВІДПРАВЛЕНО. ЗАПИС ЗАБЛОКОВАНО.\n");
         return b.toString();
+    }
+
+    // Parse only text from a saved dump. Never sends serial commands or assumes manufacturer approval.
+    static String canonicalVtxTable(String dump){
+        StringBuilder b=new StringBuilder();
+        for(String raw:dump.split("\\R")){
+            String line=raw.trim().replaceAll("\\s+"," ");
+            if(line.startsWith("vtxtable "))b.append(line).append('\n');
+        }
+        return b.toString();
+    }
+    static String inspectVtxTableReport(String dump){
+        StringBuilder b=new StringBuilder("VTX-ТАБЛИЦЯ — АНАЛІЗ З ДАМПА (ЛИШЕ ЧИТАННЯ)\n");
+        Map<Integer,int[]> bands=new TreeMap<>();
+        Map<Integer,String> names=new TreeMap<>();
+        int count=-1,channels=-1,levels=-1;
+        int[] values=null;String[] labels=null;
+        List<String> warnings=new ArrayList<>();
+        for(String raw:dump.split("\\R")){
+            String line=raw.trim();
+            if(!line.startsWith("vtxtable "))continue;
+            String[] t=line.split("\\s+");
+            try{
+                if(t.length==3&&t[1].equals("bands"))count=Integer.parseInt(t[2]);
+                else if(t.length==3&&t[1].equals("channels"))channels=Integer.parseInt(t[2]);
+                else if(t.length==3&&t[1].equals("powerlevels"))levels=Integer.parseInt(t[2]);
+                else if(t.length>=6&&t[1].equals("band")){
+                    int id=Integer.parseInt(t[2]);int[] freqs=new int[t.length-6];
+                    for(int i=6;i<t.length;i++)freqs[i-6]=Integer.parseInt(t[i]);
+                    if(bands.put(id,freqs)!=null)warnings.add("Повторний опис діапазону "+id);
+                    names.put(id,t[3]+" ("+t[4]+", "+t[5]+")");
+                }else if(t.length>=3&&t[1].equals("powervalues")){
+                    values=new int[t.length-2];for(int i=2;i<t.length;i++)values[i-2]=Integer.parseInt(t[i]);
+                }else if(t.length>=3&&t[1].equals("powerlabels"))labels=Arrays.copyOfRange(t,2,t.length);
+            }catch(NumberFormatException ex){warnings.add("Некоректне число у рядку: "+line);}
+        }
+        if(count<0&&bands.isEmpty())return b.append("[?] У дампі немає VTX-таблиці.\nЗапис залишається заблокованим.\n").toString();
+        b.append("Оголошено: ").append(count).append(" діапазонів × ").append(channels).append(" каналів; ").append(levels).append(" рівнів потужності\n");
+        if(count!=bands.size())warnings.add("Кількість описаних діапазонів не збігається з оголошеною");
+        for(var entry:bands.entrySet()){
+            int id=entry.getKey();int[] freqs=entry.getValue();
+            b.append("  ").append(id).append(" ").append(names.get(id)).append(": ").append(Arrays.toString(freqs)).append(" МГц\n");
+            if(channels!=freqs.length)warnings.add("Діапазон "+id+": кількість каналів "+freqs.length+" замість "+channels);
+            Map<Integer,Integer> seen=new HashMap<>();
+            for(int i=0;i<freqs.length;i++){
+                int f=freqs[i];
+                if(f<=0)warnings.add("Діапазон "+id+", канал "+(i+1)+": частота не задана");
+                if(f>0&&seen.putIfAbsent(f,i+1)!=null)warnings.add("Діапазон "+id+": повтор частоти "+f+" МГц (канали "+seen.get(f)+" і "+(i+1)+")");
+            }
+        }
+        b.append("Power values: ").append(values==null?"відсутні":Arrays.toString(values)).append("\n");
+        b.append("Power labels: ").append(labels==null?"відсутні":Arrays.toString(labels)).append("\n");
+        if(values==null||labels==null)warnings.add("Відсутні значення або підписи потужності");
+        else if(values.length!=levels||labels.length!=levels)warnings.add("Кількість значень/підписів потужності не збігається з powerlevels");
+        if(values!=null)for(int v:values)if(v>50)warnings.add("Значення потужності "+v+" нетипове: звірити з документацією та vtx_info; не трактувати як підтверджені dBm");
+        String band=dumpValue(dump,"vtx_band"),channel=dumpValue(dump,"vtx_channel"),power=dumpValue(dump,"vtx_power"),freq=dumpValue(dump,"vtx_freq");
+        b.append("FC: band=").append(band).append(", channel=").append(channel).append(", power index=").append(power).append(", freq=").append(freq).append(" МГц\n");
+        try{
+            int bi=Integer.parseInt(band),ci=Integer.parseInt(channel),fi=Integer.parseInt(freq);
+            int[] f=bands.get(bi);
+            if(f==null||ci<1||ci>f.length)warnings.add("Обраний діапазон/канал відсутній у таблиці");
+            else if(f[ci-1]!=fi)warnings.add("Частота FC "+fi+" не збігається з таблицею "+f[ci-1]);
+        }catch(NumberFormatException ex){warnings.add("Неможливо перевірити поточний канал/частоту FC");}
+        try{int pi=Integer.parseInt(power);if(levels>=0&&(pi<1||pi>levels))warnings.add("Індекс потужності FC поза межами таблиці");}
+        catch(NumberFormatException ex){warnings.add("Немає коректного індексу потужності FC");}
+        // A suspicious frequency from the user's actual backup: flag for manual confirmation, not automatic correction.
+        int[] bBand=bands.get(2);
+        if(bBand!=null&&bBand.length>=5&&bBand[4]==5999)warnings.add("B5 = 5999 МГц: перевірити за документацією (не виправляється автоматично)");
+        if(warnings.isEmpty())b.append("[OK] Структура таблиці узгоджена; заводські параметри НЕ підтверджені.\n");
+        else{b.append("\nПОТРІБНА ПЕРЕВІРКА:\n");for(String w:warnings)b.append("[!] ").append(w).append('\n');}
+        b.append("\nДамп не підтверджує заводську таблицю, фактичну потужність або модель VTX.\nЖОДНИХ КОМАНД НА FC НЕ НАДІСЛАНО. ЗАПИС ЗАБЛОКОВАНО.\n");
+        return b.toString();
+    }
+    void inspectVtxTable(){
+        if(importedDump==null){
+            JOptionPane.showMessageDialog(this,"Спочатку натисніть ІМПОРТ ДАМПА та виберіть резервну копію Betaflight.","Потрібен дамп",JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+        String report=inspectVtxTableReport(importedDump);
+        JTextArea area=new JTextArea(report,28,85);area.setEditable(false);
+        area.setFont(new Font(Font.MONOSPACED,Font.PLAIN,13));area.setBackground(Color.WHITE);area.setForeground(Color.BLACK);
+        JScrollPane pane=new JScrollPane(area);pane.setPreferredSize(new Dimension(900,580));
+        Object[] options={"Закрити","Зберегти звіт"};
+        int answer=JOptionPane.showOptionDialog(this,pane,"Перевірка VTX-таблиці — лише читання",JOptionPane.DEFAULT_OPTION,JOptionPane.INFORMATION_MESSAGE,null,options,options[0]);
+        if(answer==1){
+            File file=chooseFile(this,true,"vtx-table-check.txt",null);
+            if(file!=null)try{
+                if(file.exists()&&JOptionPane.showConfirmDialog(this,"Замінити файл?\n"+file,"Підтвердження",JOptionPane.YES_NO_OPTION)!=JOptionPane.YES_OPTION)return;
+                Files.writeString(file.toPath(),report,StandardCharsets.UTF_8);status.setText("Звіт VTX-таблиці: "+file);
+            }catch(IOException ex){error(ex);}
+        }
     }
 
     // A preview is intentionally read-only: never opens COM ports or sends CLI commands.
