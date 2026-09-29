@@ -90,7 +90,7 @@ public class VtxApp extends JFrame {
     final JTextArea out=new JTextArea(22,52); final JButton[] tabs=new JButton[3]; final JLabel status=new JLabel(" ");
 
     public VtxApp() {
-        super(APP_NAME+" 2.1.2 — офлайн-генератор"); setDefaultCloseOperation(EXIT_ON_CLOSE); setLayout(new BorderLayout(8,8));
+        super(APP_NAME+" 2.1.3 — офлайн-генератор"); setDefaultCloseOperation(EXIT_ON_CLOSE); setLayout(new BorderLayout(8,8));
         add(collectionPanel(),BorderLayout.WEST); add(centerPanel(),BorderLayout.CENTER); add(status,BorderLayout.SOUTH);
         initCatalog();
         load(); if(configs.isEmpty()) configs.add(new Config()); refreshList(); select(Math.min(idx,configs.size()-1));
@@ -110,6 +110,7 @@ public class VtxApp extends JFrame {
         rightTop.add(tabsP,BorderLayout.NORTH);
         JPanel fcBar=new JPanel(new GridLayout(1,2,5,4));
         fcBar.add(btn("ЗНАЙТИ FC (USB)",this::detectFc));
+        fcBar.add(btn("BACKUP FC (USB)",this::backupFc));
         fcBar.add(btn("Відправити на FC",this::sendToFc));
         rightTop.add(fcBar,BorderLayout.SOUTH);
         right.add(rightTop,BorderLayout.NORTH);
@@ -276,26 +277,35 @@ RX — протоколи
         },"fc-autodetect").start();
     }
 
-    void sendToFc(){
-        if(!System.getProperty("os.name").toLowerCase(Locale.ROOT).contains("win")){error(new IOException("Send to FC is available in the Windows build."));return;}
+    void backupFc(){
         if(detectedPort.isBlank()){
-            JOptionPane.showMessageDialog(this,"Спочатку натисніть «Знайти FC автоматично». Без визначення FC відправка заблокована.");return;
+            JOptionPane.showMessageDialog(this,"Спочатку натисніть «ЗНАЙТИ FC (USB)».");return;
         }
-        String com=detectedPort;
-        if(com==null||com.isBlank())return;
-        final String port=com.trim();
-        fCom.setText(port);
-        final boolean doSave=fSave.isSelected();
-        String cli=buildCli(collect());
-        if(cli.endsWith("save\n"))cli=cli.substring(0,cli.length()-5);
-        final String commands=cli;
-        int ok=JOptionPane.showConfirmDialog(this,"FC: "+detectedVersion+" ("+port+")\n\nВідправити команди? УВАГА: автоматичної резервної копії немає. Спочатку збережіть backup у Betaflight.\nЗміна UART може порушити керування VTX.","Send to FC",JOptionPane.YES_NO_OPTION,JOptionPane.WARNING_MESSAGE);
-        if(ok!=JOptionPane.YES_OPTION)return;
-        new Thread(()->{try{
-            String payload="#\n"+commands+"\n"+(doSave?"save\n":"exit noreboot\n");
-            String result=WindowsSerial.send(port,payload,12000);
-            SwingUtilities.invokeLater(()->{out.setText(result+"\n\n--- SENT ---\n"+payload);out.setCaretPosition(0);status.setText("CLI sent to "+port);});
-        }catch(Exception e){SwingUtilities.invokeLater(()->error(e));}}).start();
+        final String port=detectedPort;
+        status.setText("Читаємо резервну копію з "+port+". Не відключайте USB.");
+        new Thread(()->{
+            try{
+                String dump=WindowsSerial.backup(port);
+                if(!dump.contains("# dump") && !dump.contains("# version"))
+                    throw new IOException("FC не повернув повний dump. Файл не створено.");
+                Path dir=resolveDataFile().getParent().resolve("backups");
+                Files.createDirectories(dir);
+                String stamp=java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"));
+                Path file=dir.resolve("FC-"+port+"-"+stamp+".txt");
+                Files.writeString(file,dump,StandardCharsets.UTF_8,StandardOpenOption.CREATE_NEW);
+                SwingUtilities.invokeLater(()->{
+                    status.setText("Backup FC: "+file);
+                    JOptionPane.showMessageDialog(this,"Резервну копію збережено:\n"+file+"\n\nПеред записом конфігурації перевіримо UART і VTX.");
+                });
+            }catch(Exception e){SwingUtilities.invokeLater(()->error(e));}
+        },"fc-backup").start();
+    }
+
+    void sendToFc(){
+        JOptionPane.showMessageDialog(this,
+            "Відправка поки заблокована. Спочатку створіть BACKUP FC і перевірте\n"+
+            "поточний UART та конфігурацію VTX. Не надсилаємо неперевірені команди.",
+            "Безпека FC",JOptionPane.WARNING_MESSAGE);
     }
 
     static final class WindowsSerial{
@@ -336,6 +346,44 @@ Write-Output 'NOT_FOUND|COM-порти є, але Betaflight не відпові
             String output=new String(process.getInputStream().readAllBytes(),StandardCharsets.UTF_8).trim();
             for(String line:output.split("\\R"))if(line.startsWith("FOUND|")||line.startsWith("NOT_FOUND|"))return line;
             return "NOT_FOUND|"+output;
+        }
+        static String backup(String port) throws Exception {
+            if(!port.toUpperCase(Locale.ROOT).matches("COM\\d+"))throw new IOException("Некоректний COM-порт");
+            String script="""
+param([string]$portName)
+$ErrorActionPreference='Stop'
+$sp=[System.IO.Ports.SerialPort]::new($portName,115200,'None',8,'One')
+$sp.ReadTimeout=300; $sp.WriteTimeout=1500
+$sp.DtrEnable=$false; $sp.RtsEnable=$false
+try {
+  $sp.Open(); Start-Sleep -Milliseconds 300
+  $sp.DiscardInBuffer(); $sp.Write("#`r`n"); Start-Sleep -Milliseconds 350
+  $null=$sp.ReadExisting()
+  $sp.Write("dump`r`n")
+  $data=''; $last=(Get-Date); $end=(Get-Date).AddSeconds(35)
+  while((Get-Date) -lt $end) {
+    Start-Sleep -Milliseconds 120
+    $part=$sp.ReadExisting()
+    if($part.Length -gt 0){ $data+=$part; $last=Get-Date }
+    if($data.Length -gt 100 -and ((Get-Date)-$last).TotalSeconds -gt 2.5){break}
+  }
+  if($data.Length -lt 100 -or $data -notmatch '(?im)^# (dump|version)') { throw 'Incomplete dump' }
+  [Console]::OutputEncoding=[Text.Encoding]::UTF8
+  [Console]::Write($data)
+} finally { if($sp.IsOpen){try{$sp.Write("exit`r`n")}catch{}; $sp.Close()};$sp.Dispose() }
+""";
+            Path tmp=Files.createTempFile("vtx-fc-backup-",".ps1");
+            try{
+                Files.writeString(tmp,script,StandardCharsets.UTF_8);
+                Process process=new ProcessBuilder("powershell.exe","-NoProfile","-NonInteractive","-ExecutionPolicy","Bypass","-File",tmp.toString(),port)
+                    .redirectErrorStream(true).start();
+                if(!process.waitFor(43,TimeUnit.SECONDS)){
+                    process.destroyForcibly();throw new IOException("Тайм-аут читання FC");
+                }
+                String result=new String(process.getInputStream().readAllBytes(),StandardCharsets.UTF_8);
+                if(process.exitValue()!=0)throw new IOException("Backup не вдався: "+result);
+                return result;
+            }finally{Files.deleteIfExists(tmp);}
         }
         static String send(String port,String data,long timeoutMs)throws Exception{String p=port.toUpperCase(Locale.ROOT);if(!p.matches("COM\\d+"))throw new IOException("Некоректний COM-порт: "+port);Process mode=new ProcessBuilder("cmd","/c","mode",p+":","BAUD=115200","PARITY=N","DATA=8","STOP=1").redirectErrorStream(true).start();mode.waitFor(3,TimeUnit.SECONDS);try(FileInputStream in=new FileInputStream("\\\\.\\"+p);FileOutputStream out=new FileOutputStream("\\\\.\\"+p)){out.write(data.getBytes(StandardCharsets.US_ASCII));out.flush();long end=System.currentTimeMillis()+timeoutMs;ByteArrayOutputStream buf=new ByteArrayOutputStream();byte[] b=new byte[1024];while(System.currentTimeMillis()<end){while(in.available()>0){int n=in.read(b);if(n>0)buf.write(b,0,n);}if(buf.size()>0&&new String(buf.toByteArray(),StandardCharsets.US_ASCII).contains("#"))break;Thread.sleep(20);}return buf.toString(StandardCharsets.US_ASCII);}}
     }
@@ -415,6 +463,11 @@ Write-Output 'NOT_FOUND|COM-порти є, але Betaflight не відпові
             Number number(){int st=p;if(s.charAt(p)=='-')p++;if(p>=s.length()||!Character.isDigit(s.charAt(p)))err("Bad number");if(s.charAt(p)=='0')p++;else while(p<s.length()&&Character.isDigit(s.charAt(p)))p++;if(p<s.length()&&s.charAt(p)=='.'){p++;if(p>=s.length()||!Character.isDigit(s.charAt(p)))err("Bad number");while(p<s.length()&&Character.isDigit(s.charAt(p)))p++;}if(p<s.length()&&(s.charAt(p)=='e'||s.charAt(p)=='E')){p++;if(p<s.length()&&(s.charAt(p)=='+'||s.charAt(p)=='-'))p++;if(p>=s.length()||!Character.isDigit(s.charAt(p)))err("Bad exponent");while(p<s.length()&&Character.isDigit(s.charAt(p)))p++;}String n=s.substring(st,p);try{return n.contains(".")||n.contains("e")||n.contains("E")?Double.parseDouble(n):Long.parseLong(n);}catch(Exception e){err("Bad number");return 0;}}
             boolean peek(char c){return p<s.length()&&s.charAt(p)==c;}void expect(char c){ws();if(!peek(c))err("Expected '"+c+"'");p++;}void err(String m){throw new IllegalArgumentException(m+" at character "+p);}
         }
+    }
+
+    public static void main(String[] args){try{UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());}catch(Exception ignored){}installReadableDarkDefaults();SwingUtilities.invokeLater(()->{VtxApp app=new VtxApp();app.setDarkTheme(true);app.setVisible(true);});}
+}
+
     }
 
     public static void main(String[] args){try{UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());}catch(Exception ignored){}installReadableDarkDefaults();SwingUtilities.invokeLater(()->{VtxApp app=new VtxApp();app.setDarkTheme(true);app.setVisible(true);});}
