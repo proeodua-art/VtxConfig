@@ -1,0 +1,219 @@
+import javax.swing.*;
+import javax.swing.border.TitledBorder;
+import javax.swing.event.DocumentEvent;
+import javax.swing.event.DocumentListener;
+import java.awt.*;
+import java.awt.datatransfer.StringSelection;
+import java.io.*;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.*;
+import java.util.*;
+import java.util.List;
+import java.util.concurrent.TimeUnit;
+
+/**
+ * VtxConfig - offline Betaflight VTX configuration generator.
+ * Java 17+; no external runtime is required.
+ */
+public class VtxApp extends JFrame {
+    static final String APP_NAME = "VtxConfig";
+    static final int JSON_VERSION = 2;
+    static final String[] UARTS = {"UART1","UART2","UART3","UART4","UART5","UART6"};
+    static final String[] PROTOCOLS = {"IRC Tramp","TBS SmartAudio 2.0","TBS SmartAudio 2.1"};
+    static final String[] AUXES = {"AUX1","AUX2","AUX3","AUX4","AUX5","AUX6","AUX7","AUX8","AUX9","AUX10","AUX11","AUX12"};
+    static final String[] BAND_LABEL = {"0 — USER","1 — A","2 — B","3 — E","4 — F","5 — R"};
+    // Common Betaflight table; E3-E8 are the current documented common values.
+    static final int[][] FREQS = {
+        {5865,5845,5825,5805,5785,5765,5745,5725},
+        {5733,5752,5771,5790,5809,5828,5847,5866},
+        {5705,5685,5665,5645,5885,5905,5925,5945},
+        {5740,5760,5780,5800,5820,5840,5860,5880},
+        {5658,5695,5732,5769,5806,5843,5880,5917}
+    };
+    static final String[] BAND_LETTER = {"A","B","E","F","R"};
+
+    record BandStep(String aux, int band, int channel, int start, int end) {}
+
+    static final class Config {
+        String name = "Нова конфігурація";
+        String template = "";
+        String uart = "UART1";
+        String protocol = "TBS SmartAudio 2.0";
+        String aux = "AUX3";
+        int dband = 5, dchan = 1;
+        int[] powers = {0, 1, 2};
+        boolean incTable = true;
+        boolean includePortSetup = false;
+        List<BandStep> steps = defaultSteps();
+
+        static List<BandStep> defaultSteps() {
+            String a = "AUX2";
+            return new ArrayList<>(List.of(
+                new BandStep(a,1,1,900,975), new BandStep(a,2,1,975,1050),
+                new BandStep(a,3,1,1050,1125), new BandStep(a,4,1,1125,1200),
+                new BandStep(a,5,1,1200,1275), new BandStep(a,0,1,1275,1350)));
+        }
+        Config copy() {
+            Config c = new Config();
+            c.name=name; c.template=template; c.uart=uart; c.protocol=protocol; c.aux=aux;
+            c.dband=dband; c.dchan=dchan; c.powers=powers.clone(); c.incTable=incTable;
+            c.includePortSetup=includePortSetup; c.steps=new ArrayList<>(steps); return c;
+        }
+    }
+
+    final List<Config> configs = new ArrayList<>();
+    int idx=0, power=2, view=0;
+    boolean loading=false;
+    static Path dataFile;
+
+    final JTextField fName=new JTextField(25), fTemplate=new JTextField(25), fCom=new JTextField("COM3",10);
+    final JComboBox<String> fUart=new JComboBox<>(UARTS), fProtocol=new JComboBox<>(PROTOCOLS), fAux=new JComboBox<>(AUXES);
+    final JComboBox<String> fBand=new JComboBox<>(BAND_LABEL), fChan=new JComboBox<>(new String[]{"1","2","3","4","5","6","7","8"});
+    final JSpinner sP1=new JSpinner(new SpinnerNumberModel(0,0,7,1)), sP2=new JSpinner(new SpinnerNumberModel(1,0,7,1)), sP3=new JSpinner(new SpinnerNumberModel(2,0,7,1));
+    final JCheckBox fTable=new JCheckBox("Увімкнути VTX-таблицю",true), fPort=new JCheckBox("Додати налаштування VTX-порту",false);
+    final JCheckBox fSave=new JCheckBox("Після відправки виконати save",true);
+    final DefaultListModel<String> listModel=new DefaultListModel<>(); final JList<String> list=new JList<>(listModel);
+    final JComboBox<String>[] stAux=new JComboBox[6]; final JComboBox<String>[] stBand=new JComboBox[6]; final JComboBox<String>[] stChan=new JComboBox[6];
+    final JSpinner[] stStart=new JSpinner[6], stEnd=new JSpinner[6];
+    final JTextArea out=new JTextArea(22,52); final JButton[] tabs=new JButton[3]; final JLabel status=new JLabel(" ");
+
+    public VtxApp() {
+        super(APP_NAME+" — офлайн-генератор"); setDefaultCloseOperation(EXIT_ON_CLOSE); setLayout(new BorderLayout(8,8));
+        add(collectionPanel(),BorderLayout.WEST); add(centerPanel(),BorderLayout.CENTER); add(status,BorderLayout.SOUTH);
+        load(); if(configs.isEmpty()) configs.add(new Config()); refreshList(); select(Math.min(idx,configs.size()-1));
+        setSize(1250,760); setLocationRelativeTo(null); setMinimumSize(new Dimension(1050,680));
+    }
+
+    JPanel collectionPanel(){
+        JPanel left=new JPanel(new BorderLayout(5,5)); left.setBorder(new TitledBorder("Мої конфігурації")); left.setPreferredSize(new Dimension(225,640));
+        list.setSelectionMode(ListSelectionModel.SINGLE_SELECTION); list.addListSelectionListener(e->{if(!e.getValueIsAdjusting()&&!loading&&list.getSelectedIndex()>=0)select(list.getSelectedIndex());});
+        left.add(new JScrollPane(list),BorderLayout.CENTER);
+        JPanel b=new JPanel(new GridLayout(3,2,4,4)); b.add(btn("Нова",this::newCfg)); b.add(btn("Дубль",this::dupCfg)); b.add(btn("Видалити",this::delCfg)); b.add(btn("Експорт",this::exportAll)); b.add(btn("Імпорт",this::importAll)); b.add(btn("Тека даних",this::openDataDir)); left.add(b,BorderLayout.SOUTH); return left;
+    }
+    JPanel centerPanel(){
+        JPanel mid=new JPanel(new BorderLayout(5,5)); mid.setBorder(new TitledBorder("Параметри")); mid.add(form(),BorderLayout.NORTH); mid.add(stepsTable(),BorderLayout.CENTER);
+        JPanel right=new JPanel(new BorderLayout(5,5)); right.setBorder(new TitledBorder("Результат")); JPanel tabsP=new JPanel(new GridLayout(1,3,4,4));
+        String[] ns={"CLI","VTX table CLI","VTX table JSON"}; for(int i=0;i<3;i++){final int k=i; tabs[i]=btn(ns[i],()->setView(k));tabsP.add(tabs[i]);} right.add(tabsP,BorderLayout.NORTH);
+        out.setFont(new Font(Font.MONOSPACED,Font.PLAIN,12)); out.setEditable(false); right.add(new JScrollPane(out),BorderLayout.CENTER);
+        JPanel rb=new JPanel(new FlowLayout(FlowLayout.LEFT,4,4)); rb.add(btn("Копіювати",this::copyOut)); rb.add(btn("Зберегти файл",this::saveCurrent)); rb.add(btn("Зберегти всі три",this::saveAllThree)); rb.add(btn("Каталог VTX/RX",this::showCatalog)); rb.add(btn("Send to FC",this::sendToFc)); rb.add(btn("Темна тема",()->setDarkTheme(true))); rb.add(btn("Світла тема",()->setDarkTheme(false))); right.add(rb,BorderLayout.SOUTH);
+        JPanel c=new JPanel(new GridLayout(1,2,8,8)); c.add(mid); c.add(right); return c;
+    }
+    JPanel form(){
+        JPanel p=new JPanel(new GridBagLayout()); GridBagConstraints g=new GridBagConstraints(); g.insets=new Insets(3,7,3,7); g.anchor=GridBagConstraints.WEST; int y=0;
+        addRow(p,g,y++,"Назва:",fName); addRow(p,g,y++,"Шаблон VTX:",fTemplate); addRow(p,g,y++,"Послідовний порт:",fUart); addRow(p,g,y++,"Протокол:",fProtocol); addRow(p,g,y++,"AUX керування VTX:",fAux); addRow(p,g,y++,"Типовий діапазон:",fBand); addRow(p,g,y++,"Типовий канал:",fChan);
+        g.gridy=y++; g.gridx=0;p.add(new JLabel("Стани потужності:"),g); JPanel pw=new JPanel(new FlowLayout(FlowLayout.LEFT,4,0));pw.add(sP1);pw.add(sP2);pw.add(sP3);g.gridx=1;p.add(pw,g);
+        g.gridy=y++;g.gridx=0;p.add(new JLabel("VTX-таблиця:"),g);g.gridx=1;p.add(fTable,g);
+        g.gridy=y++;g.gridx=0;p.add(new JLabel("Порт у CLI:"),g);g.gridx=1;p.add(fPort,g);
+        Runnable live=()->{if(!loading){store();render();}}; fName.getDocument().addDocumentListener(new SimpleDoc(live));fTemplate.getDocument().addDocumentListener(new SimpleDoc(live));
+        for(JComboBox<?> c:List.of(fUart,fProtocol,fAux,fBand,fChan))c.addActionListener(e->live.run()); for(JSpinner s:List.of(sP1,sP2,sP3))s.addChangeListener(e->live.run()); fTable.addActionListener(e->live.run());fPort.addActionListener(e->live.run());
+        return p;
+    }
+    static void addRow(JPanel p,GridBagConstraints g,int y,String label,JComponent c){g.gridy=y;g.gridx=0;p.add(new JLabel(label),g);g.gridx=1;p.add(c,g);}
+    JPanel stepsTable(){
+        JPanel p=new JPanel(new GridBagLayout());p.setBorder(new TitledBorder("Керування діапазоном — 6 позицій"));GridBagConstraints g=new GridBagConstraints();g.insets=new Insets(2,5,2,5);String[] h={"AUX","Діапазон","Канал","Початок","Кінець"};for(int c=0;c<h.length;c++){g.gridx=c;g.gridy=0;p.add(new JLabel(h[c]),g);}
+        Runnable live=()->{if(!loading){store();render();}};for(int r=0;r<6;r++){stAux[r]=new JComboBox<>(AUXES);stBand[r]=new JComboBox<>(BAND_LABEL);stChan[r]=new JComboBox<>(new String[]{"1","2","3","4","5","6","7","8"});stStart[r]=spin(900);stEnd[r]=spin(1000);JComponent[] row={stAux[r],stBand[r],stChan[r],stStart[r],stEnd[r]};for(int c=0;c<row.length;c++){g.gridx=c;g.gridy=r+1;p.add(row[c],g);if(row[c] instanceof JComboBox<?> cb)cb.addActionListener(e->live.run());else ((JSpinner)row[c]).addChangeListener(e->live.run());}}return p;
+    }
+    static JSpinner spin(int v){JSpinner s=new JSpinner(new SpinnerNumberModel(v,800,2200,25));s.setEditor(new JSpinner.NumberEditor(s,"#"));return s;}
+    static JButton btn(String t,Runnable r){JButton b=new JButton(t);b.addActionListener(e->r.run());return b;}
+    static class SimpleDoc implements DocumentListener{final Runnable r;SimpleDoc(Runnable r){this.r=r;}public void insertUpdate(DocumentEvent e){r.run();}public void removeUpdate(DocumentEvent e){r.run();}public void changedUpdate(DocumentEvent e){r.run();}}
+
+    Config collect(){Config c=new Config();c.name=fName.getText().trim().isEmpty()?"Без назви":fName.getText().trim();c.template=fTemplate.getText().trim();c.uart=(String)fUart.getSelectedItem();c.protocol=(String)fProtocol.getSelectedItem();c.aux=(String)fAux.getSelectedItem();c.dband=bandCode((String)fBand.getSelectedItem(),5);c.dchan=Integer.parseInt((String)fChan.getSelectedItem());c.powers=new int[]{(int)sP1.getValue(),(int)sP2.getValue(),(int)sP3.getValue()};c.incTable=fTable.isSelected();c.includePortSetup=fPort.isSelected();c.steps=new ArrayList<>();for(int r=0;r<6;r++)c.steps.add(new BandStep((String)stAux[r].getSelectedItem(),bandCode((String)stBand[r].getSelectedItem(),0),Integer.parseInt((String)stChan[r].getSelectedItem()),(int)stStart[r].getValue(),(int)stEnd[r].getValue()));return c;}
+    static int bandCode(String s,int d){try{return Integer.parseInt(s.split(" ")[0]);}catch(Exception e){return d;}}
+    static int auxIndex(String a){try{return Integer.parseInt(a.replace("AUX",""))-1;}catch(Exception e){return 0;}}
+    void select(int i){if(i<0||i>=configs.size())return;idx=i;loading=true;Config c=configs.get(i);fName.setText(c.name);fTemplate.setText(c.template);fUart.setSelectedItem(c.uart);fProtocol.setSelectedItem(c.protocol);fAux.setSelectedItem(c.aux);fBand.setSelectedItem(BAND_LABEL[Math.max(0,Math.min(5,c.dband))]);fChan.setSelectedItem(String.valueOf(c.dchan));sP1.setValue(c.powers[0]);sP2.setValue(c.powers[1]);sP3.setValue(c.powers[2]);fTable.setSelected(c.incTable);fPort.setSelected(c.includePortSetup);for(int r=0;r<6;r++){BandStep s=c.steps.get(r);stAux[r].setSelectedItem(s.aux());stBand[r].setSelectedItem(BAND_LABEL[Math.max(0,Math.min(5,s.band()))]);stChan[r].setSelectedItem(String.valueOf(s.channel()));stStart[r].setValue(s.start());stEnd[r].setValue(s.end());}loading=false;list.setSelectedIndex(i);render();}
+
+    String buildCli(Config c){StringBuilder b=new StringBuilder();b.append("# VTX config: ").append(c.name).append('\n');b.append("# template: ").append(c.template.isEmpty()?"—":c.template).append(" | port: ").append(c.uart).append(" | protocol: ").append(c.protocol).append("\n\n");
+        if(c.includePortSetup){
+            b.append("# PORT SETUP: verified for Betaflight <= 2025.12; this replaces the function mask on the selected port.\n");
+            int fn=c.protocol.startsWith("IRC")?8192:2048;
+            b.append("serial ").append(c.uart).append(' ').append(fn).append(" 115200 57600 0 115200\n\n");
+            b.append("# For Betaflight 2026.12+, do not paste the serial line above; use:\n");
+            b.append("# set vtx_uart = ").append(c.uart).append("\n\n");
+        }
+        b.append("set vtx_band = ").append(c.dband).append('\n');b.append("set vtx_channel = ").append(c.dchan).append('\n');b.append("set vtx_power = ").append(c.powers[Math.max(0,Math.min(power,c.powers.length-1))]).append("\n");b.append("# power states: 1=").append(c.powers[0]).append(" 2=").append(c.powers[1]).append(" 3=").append(c.powers[2]).append("\n\n");
+        b.append("# 6-position band control\n");for(int i=0;i<c.steps.size();i++){BandStep s=c.steps.get(i);b.append("vtx ").append(i).append(' ').append(auxIndex(s.aux())).append(' ').append(s.band()).append(' ').append(s.channel()).append(' ').append(s.band()==0?0:c.powers[Math.min(power,c.powers.length-1)]).append(' ').append(s.start()).append(' ').append(s.end()).append('\n');}
+        b.append("\n# power control\n");int base=c.steps.size();b.append("vtx ").append(base).append(' ').append(auxIndex(c.aux)).append(" 0 0 ").append(c.powers[0]).append(" 900 1100\n");b.append("vtx ").append(base+1).append(' ').append(auxIndex(c.aux)).append(" 0 0 ").append(c.powers[1]).append(" 1100 1400\n");b.append("vtx ").append(base+2).append(' ').append(auxIndex(c.aux)).append(" 0 0 ").append(c.powers[2]).append(" 1400 2100\n");b.append("save\n");return b.toString();}
+
+    String buildTableCli(){Config c=collect();StringBuilder b=new StringBuilder();b.append("vtxtable bands 5\nvtxtable channels 8\n");if(c.protocol.startsWith("IRC")){b.append("vtxtable powerlevels 5\nvtxtable powervalues 25 100 200 400 600\nvtxtable powerlabels 25 100 200 400 600\n");}else if(c.protocol.endsWith("2.1")){b.append("# SmartAudio 2.1 power values are model-specific. Query: vtx_info\n# Example only (verify against the VTX manufacturer / vtx_info before use):\n");b.append("vtxtable powerlevels 4\nvtxtable powervalues 14 20 26 30\nvtxtable powerlabels 25 100 400 800").append("\n");}else{b.append("vtxtable powerlevels 4\nvtxtable powervalues 0 1 2 3\nvtxtable powerlabels 25 200 500 800\n");}for(int code=1;code<=5;code++){String l=BAND_LETTER[code-1];b.append("vtxtable band ").append(code).append(" BOSCAM_").append(l).append(' ').append(l).append(" CUSTOM");for(int f:FREQS[code-1])b.append(' ').append(f);b.append('\n');}return b.toString();}
+    String buildTableJson(Config c){StringBuilder b=new StringBuilder();String[] labels=c.protocol.startsWith("IRC")?new String[]{"25","100","200","400","600"}:new String[]{"25","200","500","800"};int[] vals=c.protocol.startsWith("IRC")?new int[]{25,100,200,400,600}:c.protocol.endsWith("2.1")?new int[]{14,20,26,30}:new int[]{0,1,2,3};b.append("{\n  \"description\": \"").append(Json.escape(c.template.isEmpty()?c.name:c.template)).append("\",\n  \"version\": \"1.0\",\n  \"vtx_table\": {\n    \"bands_list\": [\n");for(int code=1;code<=5;code++){String l=BAND_LETTER[code-1];b.append("      { \"name\": \"BOSCAM_").append(l).append("\", \"letter\": \"").append(l).append("\", \"isFactoryBand\": false, \"frequencies\": [");for(int i=0;i<8;i++){if(i>0)b.append(", ");b.append(FREQS[code-1][i]);}b.append("] }").append(code<5?",\n":"\n");}b.append("    ],\n    \"power_levels_list\": [\n");for(int i=0;i<vals.length;i++)b.append("      { \"value\": ").append(vals[i]).append(", \"label\": \"").append(labels[i]).append("\" }").append(i+1<vals.length?",\n":"\n");b.append("    ],\n    \"band\": ").append(c.dband).append(",\n    \"channel\": ").append(c.dchan).append(",\n    \"power_level\": ").append(c.powers[Math.min(power,c.powers.length-1)]).append("\n  }\n}\n");return b.toString();}
+    void setView(int k){view=k;for(int i=0;i<3;i++)tabs[i].setEnabled(i!=k);render();}void render(){Config c=collect();out.setText(view==1?buildTableCli():view==2?buildTableJson(c):buildCli(c));out.setCaretPosition(0);}
+
+    void refreshList(){listModel.clear();for(Config c:configs)listModel.addElement(c.name);}void store(){if(loading||idx<0||idx>=configs.size())return;configs.set(idx,collect());persist();loading=true;int s=idx;refreshList();list.setSelectedIndex(s);loading=false;}
+    void newCfg(){String n=JOptionPane.showInputDialog(this,"Назва конфігурації:","Нова конфігурація");if(n==null||n.isBlank())return;Config c=new Config();c.name=n.trim();configs.add(c);persist();refreshList();select(configs.size()-1);}void dupCfg(){store();Config c=configs.get(idx).copy();c.name+=" (копія)";configs.add(c);persist();refreshList();select(configs.size()-1);}void delCfg(){if(configs.size()<=1){JOptionPane.showMessageDialog(this,"Має залишитися хоча б одна конфігурація.");return;}if(JOptionPane.showConfirmDialog(this,"Видалити «"+configs.get(idx).name+"»?","Підтвердження",JOptionPane.YES_NO_OPTION)!=JOptionPane.YES_OPTION)return;configs.remove(idx);persist();refreshList();select(Math.min(idx,configs.size()-1));}
+    void copyOut(){StringSelection s=new StringSelection(out.getText());Toolkit.getDefaultToolkit().getSystemClipboard().setContents(s,s);status.setText("Скопійовано в буфер обміну.");}
+    void saveCurrent(){String[] n={"vtx_diff_all.txt","vtx_table.txt","vtx_table.json"};JFileChooser fc=new JFileChooser();fc.setSelectedFile(new File(n[view]));if(fc.showSaveDialog(this)!=JFileChooser.APPROVE_OPTION)return;try{Files.writeString(fc.getSelectedFile().toPath(),out.getText(),StandardCharsets.UTF_8);status.setText("Збережено: "+fc.getSelectedFile());}catch(IOException e){error(e);}}
+    void saveAllThree(){JFileChooser fc=new JFileChooser();fc.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);if(fc.showSaveDialog(this)!=JFileChooser.APPROVE_OPTION)return;Path d=fc.getSelectedFile().toPath();Config c=collect();try{Files.writeString(d.resolve("vtx_diff_all.txt"),buildCli(c),StandardCharsets.UTF_8);Files.writeString(d.resolve("vtx_table.txt"),buildTableCli(),StandardCharsets.UTF_8);Files.writeString(d.resolve("vtx_table.json"),buildTableJson(c),StandardCharsets.UTF_8);status.setText("Три файли збережено у "+d);}catch(IOException e){error(e);}}
+    void exportAll(){store();JFileChooser fc=new JFileChooser();fc.setSelectedFile(new File("vtx_configs.json"));if(fc.showSaveDialog(this)!=JFileChooser.APPROVE_OPTION)return;try{Files.writeString(fc.getSelectedFile().toPath(),Json.stringify(configs),StandardCharsets.UTF_8);status.setText("Колекцію збережено: "+fc.getSelectedFile());}catch(IOException e){error(e);}}
+    void importAll(){JFileChooser fc=new JFileChooser();if(fc.showOpenDialog(this)!=JFileChooser.APPROVE_OPTION)return;try{String raw=Files.readString(fc.getSelectedFile().toPath(),StandardCharsets.UTF_8);List<Config> incoming=Json.toConfigs(raw);Set<String> known=new HashSet<>();for(Config c:configs)known.add(c.name);int added=0;for(Config c:incoming)if(known.add(c.name)){configs.add(c);added++;}persist();refreshList();select(configs.size()-1);status.setText("Імпортовано: "+added);}catch(Exception e){error(e);}}
+    void openDataDir(){try{Desktop.getDesktop().open(dataFile.getParent().toFile());}catch(Exception e){JOptionPane.showMessageDialog(this,"Тека даних:\n"+dataFile.getParent());}}void error(Exception e){JOptionPane.showMessageDialog(this,e.getMessage(),"Помилка",JOptionPane.ERROR_MESSAGE);}
+
+    void showCatalog(){JTextArea a=new JTextArea(18,70);a.setEditable(false);a.setText(CATALOG);a.setCaretPosition(0);JOptionPane.showMessageDialog(this,new JScrollPane(a),"Каталог VTX / RX",JOptionPane.INFORMATION_MESSAGE);}
+    static final String CATALOG="""
+VTX — протоколи / типи
+
+IRC Tramp
+- Тип: аналоговий VTX control
+- CLI power values: 25 100 200 400 600 (приклад документації Betaflight)
+
+TBS SmartAudio 2.0
+- CLI power values: 0 1 2 3
+- Типові labels: 25 200 500 800
+
+TBS SmartAudio 2.1
+- Power values залежать від конкретної моделі VTX; приклад: 14 20 26 30 dBm.
+
+RX — протоколи
+- ExpressLRS / TBS Crossfire / Tracer: CRSF
+- FrSky: SBUS / FPort
+- Spektrum: Spektrum1024/2048 / SRXL2
+- FlySky: IBUS
+
+Каталог навмисно не містить прив'язки моделі до UART/pin: це залежить від конкретного flight controller.
+""";
+
+    void sendToFc(){
+        if(!System.getProperty("os.name").toLowerCase(Locale.ROOT).contains("win")){error(new IOException("Send to FC is available in the Windows build."));return;}
+        String com=JOptionPane.showInputDialog(this,"COM port:",fCom.getText());
+        if(com==null||com.isBlank())return;
+        final String port=com.trim();
+        fCom.setText(port);
+        final boolean doSave=fSave.isSelected();
+        String cli=buildCli(collect());
+        if(cli.endsWith("save\n"))cli=cli.substring(0,cli.length()-5);
+        final String commands=cli;
+        int ok=JOptionPane.showConfirmDialog(this,"Send VTX CLI to "+port+"?\nThis can change the FC port configuration and may reboot it.","Send to FC",JOptionPane.YES_NO_OPTION,JOptionPane.WARNING_MESSAGE);
+        if(ok!=JOptionPane.YES_OPTION)return;
+        new Thread(()->{try{
+            String payload="#\n"+commands+"\n"+(doSave?"save\n":"exit noreboot\n");
+            String result=WindowsSerial.send(port,payload,12000);
+            SwingUtilities.invokeLater(()->{out.setText(result+"\n\n--- SENT ---\n"+payload);out.setCaretPosition(0);status.setText("CLI sent to "+port);});
+        }catch(Exception e){SwingUtilities.invokeLater(()->error(e));}}).start();
+    }
+
+    static final class WindowsSerial{
+        static String send(String port,String data,long timeoutMs)throws Exception{String p=port.toUpperCase(Locale.ROOT);if(!p.matches("COM\\d+"))throw new IOException("Некоректний COM-порт: "+port);Process mode=new ProcessBuilder("cmd","/c","mode",p+":","BAUD=115200","PARITY=N","DATA=8","STOP=1").redirectErrorStream(true).start();mode.waitFor(3,TimeUnit.SECONDS);try(FileInputStream in=new FileInputStream("\\\\.\\"+p);FileOutputStream out=new FileOutputStream("\\\\.\\"+p)){out.write(data.getBytes(StandardCharsets.US_ASCII));out.flush();long end=System.currentTimeMillis()+timeoutMs;ByteArrayOutputStream buf=new ByteArrayOutputStream();byte[] b=new byte[1024];while(System.currentTimeMillis()<end){while(in.available()>0){int n=in.read(b);if(n>0)buf.write(b,0,n);}if(buf.size()>0&&new String(buf.toByteArray(),StandardCharsets.US_ASCII).contains("#"))break;Thread.sleep(20);}return buf.toString(StandardCharsets.US_ASCII);}}
+    }
+
+    static Path resolveDataFile(){String os=System.getProperty("os.name").toLowerCase();Path base;if(os.contains("win")){String a=System.getenv("APPDATA");base=a!=null?Path.of(a):Path.of(System.getProperty("user.home"));}else if(os.contains("mac"))base=Path.of(System.getProperty("user.home"),"Library","Application Support");else{String x=System.getenv("XDG_CONFIG_HOME");base=x!=null?Path.of(x):Path.of(System.getProperty("user.home"),".config");}Path d=base.resolve(APP_NAME);try{Files.createDirectories(d);}catch(IOException ignored){}return d.resolve("vtx_configs.json");}
+    void load(){dataFile=resolveDataFile();if(!Files.exists(dataFile))return;try{configs.addAll(Json.toConfigs(Files.readString(dataFile,StandardCharsets.UTF_8)));status.setText("Завантажено конфігурацій: "+configs.size());}catch(Exception e){status.setText("Колекцію не прочитано: "+e.getMessage());}}
+    void persist(){try{Files.writeString(dataFile,Json.stringify(configs),StandardCharsets.UTF_8,StandardOpenOption.CREATE,StandardOpenOption.TRUNCATE_EXISTING,StandardOpenOption.WRITE);}catch(IOException e){status.setText("Не збережено: "+e.getMessage());}}
+    void setDarkTheme(boolean dark){Color bg=dark?new Color(45,45,48):UIManager.getColor("Panel.background");Color fg=dark?new Color(235,235,235):UIManager.getColor("Label.foreground");for(Window w:Window.getWindows())applyColors(w,bg,fg,dark);}
+    void applyColors(Component c,Color bg,Color fg,boolean dark){if(c instanceof JPanel||c instanceof JScrollPane||c instanceof JViewport)c.setBackground(bg);if(c instanceof JLabel||c instanceof JCheckBox)c.setForeground(fg);if(c instanceof JTextField||c instanceof JTextArea||c instanceof JList||c instanceof JComboBox||c instanceof JSpinner){c.setBackground(dark?new Color(60,60,63):Color.WHITE);c.setForeground(fg);}if(c instanceof Container co)for(Component x:co.getComponents())applyColors(x,bg,fg,dark);c.repaint();}
+
+    static final class Json{
+        static String escape(String s){StringBuilder b=new StringBuilder();for(char c:s.toCharArray()){switch(c){case '\\'->b.append("\\\\");case '"'->b.append("\\\"");case '\n'->b.append("\\n");case '\r'->b.append("\\r");case '\t'->b.append("\\t");default->b.append(c);}}return b.toString();}
+        static String stringify(List<Config> list){StringBuilder b=new StringBuilder("{\n  \"formatVersion\": ").append(JSON_VERSION).append(",\n  \"configs\": [\n");for(int i=0;i<list.size();i++){Config c=list.get(i);b.append("    {\n");field(b,"name",c.name,true);field(b,"template",c.template,true);field(b,"uart",c.uart,true);field(b,"protocol",c.protocol,true);field(b,"aux",c.aux,true);num(b,"dband",c.dband,true);num(b,"dchan",c.dchan,true);b.append("      \"powers\": [").append(c.powers[0]).append(", ").append(c.powers[1]).append(", ").append(c.powers[2]).append("],\n");bool(b,"incTable",c.incTable,true);bool(b,"includePortSetup",c.includePortSetup,true);b.append("      \"steps\": [\n");for(int j=0;j<c.steps.size();j++){BandStep s=c.steps.get(j);b.append("        [\"").append(escape(s.aux())).append("\", ").append(s.band()).append(", ").append(s.channel()).append(", ").append(s.start()).append(", ").append(s.end()).append("]").append(j+1<c.steps.size()?",":"").append('\n');}b.append("      ]\n    }").append(i+1<list.size()?",":"").append('\n');}return b.append("  ]\n}\n").toString();}
+        static void field(StringBuilder b,String k,String v,boolean comma){b.append("      \"").append(k).append("\": \"").append(escape(v)).append("\"").append(comma?",":"").append('\n');}static void num(StringBuilder b,String k,int v,boolean comma){b.append("      \"").append(k).append("\": ").append(v).append(comma?",":"").append('\n');}static void bool(StringBuilder b,String k,boolean v,boolean comma){b.append("      \"").append(k).append("\": ").append(v).append(comma?",":"").append('\n');}
+        static List<Config> toConfigs(String raw){Object root=new Parser(raw).parse();if(!(root instanceof Map<?,?> m))throw new IllegalArgumentException("JSON root must be object");Object arr=m.get("configs");if(!(arr instanceof List<?> l))throw new IllegalArgumentException("JSON field 'configs' must be array");List<Config> out=new ArrayList<>();for(Object o:l){if(!(o instanceof Map<?,?> m2))throw new IllegalArgumentException("config must be object");Config c=new Config();c.name=str(m2,"name","Без назви");c.template=str(m2,"template","");c.uart=str(m2,"uart","UART1");c.protocol=str(m2,"protocol","TBS SmartAudio 2.0");c.aux=str(m2,"aux","AUX3");c.dband=num(m2,"dband",5);c.dchan=num(m2,"dchan",1);Object ps=m2.get("powers");if(ps instanceof List<?> p){for(int i=0;i<3&&i<p.size();i++)c.powers[i]=toInt(p.get(i),c.powers[i]);}c.incTable=bool(m2,"incTable",true);c.includePortSetup=bool(m2,"includePortSetup",false);Object ss=m2.get("steps");if(ss instanceof List<?> sl){List<BandStep> steps=new ArrayList<>();for(Object so:sl){if(so instanceof List<?> x&&x.size()==5)steps.add(new BandStep(String.valueOf(x.get(0)),toInt(x.get(1),0),toInt(x.get(2),1),toInt(x.get(3),900),toInt(x.get(4),1000)));}if(steps.size()==6)c.steps=steps;}out.add(c);}return out;}
+        static String str(Map<?,?>m,String k,String d){Object v=m.get(k);return v==null?d:String.valueOf(v);}static int num(Map<?,?>m,String k,int d){return toInt(m.get(k),d);}static boolean bool(Map<?,?>m,String k,boolean d){Object v=m.get(k);return v instanceof Boolean x?x:d;}static int toInt(Object v,int d){return v instanceof Number n?n.intValue():d;}
+        static final class Parser{final String s;int p=0;Parser(String s){this.s=s;}void ws(){while(p<s.length()&&Character.isWhitespace(s.charAt(p)))p++;}Object parse(){ws();Object v=value();ws();if(p!=s.length())err("Trailing data");return v;}Object value(){ws();if(p>=s.length())err("Unexpected end");char c=s.charAt(p);if(c=='{')return object();if(c=='[')return array();if(c=='"')return string();if(s.startsWith("true",p)){p+=4;return true;}if(s.startsWith("false",p)){p+=5;return false;}if(s.startsWith("null",p)){p+=4;return null;}if(c=='-'||Character.isDigit(c))return number();err("Unexpected token");return null;}
+            Map<String,Object> object(){Map<String,Object> m=new LinkedHashMap<>();p++;ws();if(peek('}')){p++;return m;}while(true){ws();if(!peek('"'))err("Object key must be string");String k=string();ws();expect(':');m.put(k,value());ws();if(peek('}')){p++;return m;}expect(',');}}
+            List<Object> array(){List<Object> a=new ArrayList<>();p++;ws();if(peek(']')){p++;return a;}while(true){a.add(value());ws();if(peek(']')){p++;return a;}expect(',');}}
+            String string(){expect('"');StringBuilder b=new StringBuilder();while(p<s.length()){char c=s.charAt(p++);if(c=='"')return b.toString();if(c=='\\'){if(p>=s.length())err("Bad escape");char e=s.charAt(p++);switch(e){case '"'->b.append('"');case '\\'->b.append('\\');case '/'->b.append('/');case 'b'->b.append('\b');case 'f'->b.append('\f');case 'n'->b.append('\n');case 'r'->b.append('\r');case 't'->b.append('\t');case 'u'->{if(p+4>s.length())err("Bad unicode escape");int cp=Integer.parseInt(s.substring(p,p+4),16);p+=4;b.append((char)cp);}default->err("Bad escape");}}else{if(c<0x20)err("Control character in string");b.append(c);}}err("Unterminated string");return null;}
+            Number number(){int st=p;if(s.charAt(p)=='-')p++;if(p>=s.length()||!Character.isDigit(s.charAt(p)))err("Bad number");if(s.charAt(p)=='0')p++;else while(p<s.length()&&Character.isDigit(s.charAt(p)))p++;if(p<s.length()&&s.charAt(p)=='.'){p++;if(p>=s.length()||!Character.isDigit(s.charAt(p)))err("Bad number");while(p<s.length()&&Character.isDigit(s.charAt(p)))p++;}if(p<s.length()&&(s.charAt(p)=='e'||s.charAt(p)=='E')){p++;if(p<s.length()&&(s.charAt(p)=='+'||s.charAt(p)=='-'))p++;if(p>=s.length()||!Character.isDigit(s.charAt(p)))err("Bad exponent");while(p<s.length()&&Character.isDigit(s.charAt(p)))p++;}String n=s.substring(st,p);try{return n.contains(".")||n.contains("e")||n.contains("E")?Double.parseDouble(n):Long.parseLong(n);}catch(Exception e){err("Bad number");return 0;}}
+            boolean peek(char c){return p<s.length()&&s.charAt(p)==c;}void expect(char c){ws();if(!peek(c))err("Expected '"+c+"'");p++;}void err(String m){throw new IllegalArgumentException(m+" at character "+p);}
+        }
+    }
+
+    public static void main(String[] args){try{UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());}catch(Exception ignored){}SwingUtilities.invokeLater(()->new VtxApp().setVisible(true));}
+}
