@@ -1,9 +1,8 @@
+
 name: Build Windows MSI
 
 on:
   workflow_dispatch:
-  push:
-    tags: ['v*']
 
 jobs:
   build:
@@ -21,18 +20,28 @@ jobs:
       - name: Compile
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Force out-win | Out-Null
+          if (!(Test-Path 'src/VtxApp.java')) { throw 'Missing src/VtxApp.java' }
           javac -d out-win src/VtxApp.java
+          if ($LASTEXITCODE -ne 0) { throw 'Java compilation failed' }
           jar --create --file out-win/VtxConfig.jar --main-class VtxApp -C out-win .
+          if ($LASTEXITCODE -ne 0) { throw 'JAR creation failed' }
+          if ((Get-Item out-win/VtxConfig.jar).Length -lt 5000) { throw 'JAR is unexpectedly small' }
 
       - name: Package MSI
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Force dist-win | Out-Null
-          jpackage --type msi --name VtxConfig --input out-win --main-jar VtxConfig.jar --dest dist-win --app-version 1.0.0 --win-shortcut --win-menu --win-dir-chooser --java-options '-Xmx256m'
+          jpackage --type msi --name VtxConfig --input out-win --main-jar VtxConfig.jar --dest dist-win --app-version 1.0.1 --win-shortcut --win-menu --win-dir-chooser --java-options '-Xmx256m'
+          if ($LASTEXITCODE -ne 0) { throw 'MSI packaging failed' }
+          if (!(Get-ChildItem dist-win/*.msi)) { throw 'MSI was not created' }
 
       - name: Upload MSI
         uses: actions/upload-artifact@v4
         with:
           name: VtxConfig-Windows-MSI
           path: dist-win/*.msi
+          if-no-files-found: error
+  
