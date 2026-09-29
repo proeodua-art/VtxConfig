@@ -24,15 +24,16 @@ jobs:
           if ((Get-Item VtxConfig.jar).Length -lt 15000) { throw 'JAR unexpectedly small' }
           New-Item -ItemType Directory -Force package-input | Out-Null
           Copy-Item VtxConfig.jar package-input/
+          Copy-Item catalog package-input/catalog -Recurse
       - name: Build MSI
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          jpackage --type msi --name VtxConfig --input package-input --main-jar VtxConfig.jar --dest dist-win --app-version 2.2.6 --win-shortcut --win-menu --win-dir-chooser --java-options '-Xmx512m'
+          jpackage --type msi --name VtxConfig --input package-input --main-jar VtxConfig.jar --dest dist-win --app-version 2.2.9 --win-shortcut --win-menu --win-dir-chooser --java-options '-Xmx512m'
           if ($LASTEXITCODE -ne 0) { throw 'MSI build failed' }
           if (!(Get-ChildItem dist-win/*.msi)) { throw 'MSI not created' }
       - uses: actions/upload-artifact@v4
         with:
-          name: VtxConfig-2.2.6-Windows-MSI
+          name: VtxConfig-2.2.9-Windows-MSI
           path: dist-win/*.msi
           if-no-files-found: error
