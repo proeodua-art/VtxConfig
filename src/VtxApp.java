@@ -90,7 +90,7 @@ public class VtxApp extends JFrame {
     final JTextArea out=new JTextArea(22,52); final JButton[] tabs=new JButton[3]; final JLabel status=new JLabel(" ");
 
     public VtxApp() {
-        super(APP_NAME+" — офлайн-генератор"); setDefaultCloseOperation(EXIT_ON_CLOSE); setLayout(new BorderLayout(8,8));
+        super(APP_NAME+" 2.1.2 — офлайн-генератор"); setDefaultCloseOperation(EXIT_ON_CLOSE); setLayout(new BorderLayout(8,8));
         add(collectionPanel(),BorderLayout.WEST); add(centerPanel(),BorderLayout.CENTER); add(status,BorderLayout.SOUTH);
         initCatalog();
         load(); if(configs.isEmpty()) configs.add(new Config()); refreshList(); select(Math.min(idx,configs.size()-1));
@@ -106,9 +106,15 @@ public class VtxApp extends JFrame {
     JPanel centerPanel(){
         JPanel mid=new JPanel(new BorderLayout(5,5)); mid.setBorder(new TitledBorder("Параметри")); JPanel top=new JPanel(new BorderLayout(6,6));top.add(selectedPanel(),BorderLayout.NORTH);top.add(form(),BorderLayout.CENTER);mid.add(top,BorderLayout.NORTH); mid.add(stepsTable(),BorderLayout.CENTER);
         JPanel right=new JPanel(new BorderLayout(5,5)); right.setBorder(new TitledBorder("Результат")); JPanel tabsP=new JPanel(new GridLayout(1,3,4,4));
-        String[] ns={"CLI","VTX table CLI","VTX table JSON"}; for(int i=0;i<3;i++){final int k=i; tabs[i]=btn(ns[i],()->setView(k));tabsP.add(tabs[i]);} right.add(tabsP,BorderLayout.NORTH);
+        String[] ns={"CLI","VTX table CLI","VTX table JSON"}; for(int i=0;i<3;i++){final int k=i; tabs[i]=btn(ns[i],()->setView(k));tabsP.add(tabs[i]);} JPanel rightTop=new JPanel(new BorderLayout(4,4));
+        rightTop.add(tabsP,BorderLayout.NORTH);
+        JPanel fcBar=new JPanel(new GridLayout(1,2,5,4));
+        fcBar.add(btn("ЗНАЙТИ FC (USB)",this::detectFc));
+        fcBar.add(btn("Відправити на FC",this::sendToFc));
+        rightTop.add(fcBar,BorderLayout.SOUTH);
+        right.add(rightTop,BorderLayout.NORTH);
         out.setFont(new Font(Font.MONOSPACED,Font.PLAIN,12)); out.setEditable(false); right.add(new JScrollPane(out),BorderLayout.CENTER);
-        JPanel rb=new JPanel(new FlowLayout(FlowLayout.LEFT,4,4)); rb.add(btn("Копіювати",this::copyOut)); rb.add(btn("Зберегти файл",this::saveCurrent)); rb.add(btn("Зберегти всі три",this::saveAllThree)); rb.add(btn("Каталог з фото",this::showCatalog)); rb.add(btn("Знайти FC автоматично",this::detectFc)); rb.add(btn("Send to FC",this::sendToFc)); rb.add(btn("Темна тема",()->setDarkTheme(true))); rb.add(btn("Світла тема",()->setDarkTheme(false))); right.add(rb,BorderLayout.SOUTH);
+        JPanel rb=new JPanel(new FlowLayout(FlowLayout.LEFT,4,4)); rb.add(btn("Копіювати",this::copyOut)); rb.add(btn("Зберегти файл",this::saveCurrent)); rb.add(btn("Зберегти всі три",this::saveAllThree)); rb.add(btn("Каталог з фото",this::showCatalog)); rb.add(btn("Темна тема",()->setDarkTheme(true))); rb.add(btn("Світла тема",()->setDarkTheme(false))); right.add(rb,BorderLayout.SOUTH);
         JPanel c=new JPanel(new GridLayout(1,2,8,8)); c.add(mid); c.add(right); return c;
     }
     JPanel form(){
@@ -283,7 +289,7 @@ RX — протоколи
         String cli=buildCli(collect());
         if(cli.endsWith("save\n"))cli=cli.substring(0,cli.length()-5);
         final String commands=cli;
-        int ok=JOptionPane.showConfirmDialog(this,"FC: "+detectedVersion+" ("+port+")\n\nВідправити команди? Перед цим збережіть резервну копію в Betaflight.\nЗміна UART може порушити керування VTX.","Send to FC",JOptionPane.YES_NO_OPTION,JOptionPane.WARNING_MESSAGE);
+        int ok=JOptionPane.showConfirmDialog(this,"FC: "+detectedVersion+" ("+port+")\n\nВідправити команди? УВАГА: автоматичної резервної копії немає. Спочатку збережіть backup у Betaflight.\nЗміна UART може порушити керування VTX.","Send to FC",JOptionPane.YES_NO_OPTION,JOptionPane.WARNING_MESSAGE);
         if(ok!=JOptionPane.YES_OPTION)return;
         new Thread(()->{try{
             String payload="#\n"+commands+"\n"+(doSave?"save\n":"exit noreboot\n");
@@ -337,8 +343,64 @@ Write-Output 'NOT_FOUND|COM-порти є, але Betaflight не відпові
     static Path resolveDataFile(){String os=System.getProperty("os.name").toLowerCase();Path base;if(os.contains("win")){String a=System.getenv("APPDATA");base=a!=null?Path.of(a):Path.of(System.getProperty("user.home"));}else if(os.contains("mac"))base=Path.of(System.getProperty("user.home"),"Library","Application Support");else{String x=System.getenv("XDG_CONFIG_HOME");base=x!=null?Path.of(x):Path.of(System.getProperty("user.home"),".config");}Path d=base.resolve(APP_NAME);try{Files.createDirectories(d);}catch(IOException ignored){}return d.resolve("vtx_configs.json");}
     void load(){dataFile=resolveDataFile();if(!Files.exists(dataFile))return;try{configs.addAll(Json.toConfigs(Files.readString(dataFile,StandardCharsets.UTF_8)));status.setText("Завантажено конфігурацій: "+configs.size());}catch(Exception e){status.setText("Колекцію не прочитано: "+e.getMessage());}}
     void persist(){try{Files.writeString(dataFile,Json.stringify(configs),StandardCharsets.UTF_8,StandardOpenOption.CREATE,StandardOpenOption.TRUNCATE_EXISTING,StandardOpenOption.WRITE);}catch(IOException e){status.setText("Не збережено: "+e.getMessage());}}
-    void setDarkTheme(boolean dark){Color bg=dark?new Color(22,31,46):UIManager.getColor("Panel.background");Color fg=dark?new Color(235,235,235):UIManager.getColor("Label.foreground");for(Window w:Window.getWindows())applyColors(w,bg,fg,dark);}
-    void applyColors(Component c,Color bg,Color fg,boolean dark){if(c instanceof JPanel||c instanceof JScrollPane||c instanceof JViewport)c.setBackground(bg);if(c instanceof JLabel||c instanceof JCheckBox)c.setForeground(fg);if(c instanceof JTextField||c instanceof JTextArea||c instanceof JList||c instanceof JComboBox||c instanceof JSpinner){c.setBackground(dark?new Color(35,48,67):Color.WHITE);c.setForeground(fg);}if(c instanceof Container co)for(Component x:co.getComponents())applyColors(x,bg,fg,dark);c.repaint();}
+    // Set Swing defaults BEFORE constructing controls, including popup menus and dialogs.
+    static void installReadableDarkDefaults(){
+        Color bg=new Color(22,31,46), field=new Color(35,48,67);
+        Color fg=new Color(242,246,252), selected=new Color(53,113,177);
+        String[] foreground={"Label.foreground","CheckBox.foreground","RadioButton.foreground",
+            "ComboBox.foreground","ComboBox.selectionForeground","List.foreground","List.selectionForeground",
+            "TextField.foreground","TextArea.foreground","Spinner.foreground","FormattedTextField.foreground",
+            "OptionPane.messageForeground","TitledBorder.titleColor","Menu.foreground","MenuItem.foreground"};
+        for(String key:foreground)UIManager.put(key,new javax.swing.plaf.ColorUIResource(fg));
+        String[] backgrounds={"Panel.background","Viewport.background","OptionPane.background",
+            "CheckBox.background","RadioButton.background","ScrollPane.background"};
+        for(String key:backgrounds)UIManager.put(key,new javax.swing.plaf.ColorUIResource(bg));
+        for(String key:new String[]{"ComboBox.background","ComboBox.selectionBackground",
+                "List.background","TextField.background","TextArea.background",
+                "Spinner.background","FormattedTextField.background"})
+            UIManager.put(key,new javax.swing.plaf.ColorUIResource(key.contains("selection")?selected:field));
+        UIManager.put("List.selectionBackground",new javax.swing.plaf.ColorUIResource(selected));
+        UIManager.put("TextField.caretForeground",new javax.swing.plaf.ColorUIResource(fg));
+        UIManager.put("TextArea.caretForeground",new javax.swing.plaf.ColorUIResource(fg));
+    }
+    void setDarkTheme(boolean dark){
+        Color bg=dark?new Color(22,31,46):UIManager.getColor("Panel.background");
+        Color fg=dark?new Color(242,246,252):UIManager.getColor("Label.foreground");
+        for(Window w:Window.getWindows())applyColors(w,bg,fg,dark);
+    }
+    void applyColors(Component c,Color bg,Color fg,boolean dark){
+        Color field=dark?new Color(35,48,67):Color.WHITE;
+        if(c instanceof JPanel||c instanceof JScrollPane||c instanceof JViewport)c.setBackground(bg);
+        if(c instanceof JLabel||c instanceof JCheckBox)c.setForeground(fg);
+        if(c instanceof JCheckBox cb){cb.setOpaque(false);cb.setBackground(bg);}
+        if(c instanceof JTextField||c instanceof JTextArea||c instanceof JList||c instanceof JComboBox||c instanceof JSpinner){
+            c.setBackground(field);c.setForeground(fg);
+        }
+        if(c instanceof JComboBox<?> combo){
+            // Replace the Windows native combo UI: its closed-cell painter can ignore
+            // both foreground and the custom renderer, producing white-on-white text.
+            combo.setUI(new javax.swing.plaf.basic.BasicComboBoxUI());
+            combo.setOpaque(true);
+            combo.setBackground(field);
+            combo.setForeground(fg);
+            combo.setRenderer(new DefaultListCellRenderer(){
+                @Override public Component getListCellRendererComponent(JList<?> list,Object value,int index,boolean selected,boolean focus){
+                    super.getListCellRendererComponent(list,value,index,selected,focus);
+                    setOpaque(true);
+                    setBackground(selected?new Color(53,113,177):field);
+                    setForeground(Color.WHITE);
+                    return this;
+                }
+            });
+        }
+        if(c instanceof JSpinner spinner && spinner.getEditor() instanceof JSpinner.DefaultEditor editor){
+            editor.getTextField().setBackground(field);
+            editor.getTextField().setForeground(fg);
+            editor.getTextField().setCaretColor(fg);
+        }
+        if(c instanceof Container co)for(Component x:co.getComponents())applyColors(x,bg,fg,dark);
+        c.repaint();
+    }
 
     static final class Json{
         static String escape(String s){StringBuilder b=new StringBuilder();for(char c:s.toCharArray()){switch(c){case '\\'->b.append("\\\\");case '"'->b.append("\\\"");case '\n'->b.append("\\n");case '\r'->b.append("\\r");case '\t'->b.append("\\t");default->b.append(c);}}return b.toString();}
@@ -355,5 +417,5 @@ Write-Output 'NOT_FOUND|COM-порти є, але Betaflight не відпові
         }
     }
 
-    public static void main(String[] args){try{UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());}catch(Exception ignored){}SwingUtilities.invokeLater(()->{VtxApp app=new VtxApp();app.setDarkTheme(true);app.setVisible(true);});}
+    public static void main(String[] args){try{UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());}catch(Exception ignored){}installReadableDarkDefaults();SwingUtilities.invokeLater(()->{VtxApp app=new VtxApp();app.setDarkTheme(true);app.setVisible(true);});}
 }
