@@ -86,6 +86,7 @@ public class VtxApp extends JFrame {
         public String toString(){return maker+" · "+model;}
     }
     String selectedVtx="";
+    volatile String detectedPort="", detectedVersion="";
     final JTextArea out=new JTextArea(22,52); final JButton[] tabs=new JButton[3]; final JLabel status=new JLabel(" ");
 
     public VtxApp() {
@@ -107,7 +108,7 @@ public class VtxApp extends JFrame {
         JPanel right=new JPanel(new BorderLayout(5,5)); right.setBorder(new TitledBorder("Результат")); JPanel tabsP=new JPanel(new GridLayout(1,3,4,4));
         String[] ns={"CLI","VTX table CLI","VTX table JSON"}; for(int i=0;i<3;i++){final int k=i; tabs[i]=btn(ns[i],()->setView(k));tabsP.add(tabs[i]);} right.add(tabsP,BorderLayout.NORTH);
         out.setFont(new Font(Font.MONOSPACED,Font.PLAIN,12)); out.setEditable(false); right.add(new JScrollPane(out),BorderLayout.CENTER);
-        JPanel rb=new JPanel(new FlowLayout(FlowLayout.LEFT,4,4)); rb.add(btn("Копіювати",this::copyOut)); rb.add(btn("Зберегти файл",this::saveCurrent)); rb.add(btn("Зберегти всі три",this::saveAllThree)); rb.add(btn("Каталог з фото",this::showCatalog)); rb.add(btn("Send to FC",this::sendToFc)); rb.add(btn("Темна тема",()->setDarkTheme(true))); rb.add(btn("Світла тема",()->setDarkTheme(false))); right.add(rb,BorderLayout.SOUTH);
+        JPanel rb=new JPanel(new FlowLayout(FlowLayout.LEFT,4,4)); rb.add(btn("Копіювати",this::copyOut)); rb.add(btn("Зберегти файл",this::saveCurrent)); rb.add(btn("Зберегти всі три",this::saveAllThree)); rb.add(btn("Каталог з фото",this::showCatalog)); rb.add(btn("Знайти FC автоматично",this::detectFc)); rb.add(btn("Send to FC",this::sendToFc)); rb.add(btn("Темна тема",()->setDarkTheme(true))); rb.add(btn("Світла тема",()->setDarkTheme(false))); right.add(rb,BorderLayout.SOUTH);
         JPanel c=new JPanel(new GridLayout(1,2,8,8)); c.add(mid); c.add(right); return c;
     }
     JPanel form(){
@@ -244,9 +245,37 @@ RX — протоколи
 Каталог навмисно не містить прив'язки моделі до UART/pin: це залежить від конкретного flight controller.
 """;
 
+    void detectFc(){
+        if(!System.getProperty("os.name").toLowerCase(Locale.ROOT).contains("win")){
+            JOptionPane.showMessageDialog(this,"Автопошук COM доступний у Windows.");return;
+        }
+        detectedPort=""; detectedVersion="";
+        status.setText("Пошук політного контролера... Закрийте Betaflight Configurator.");
+        new Thread(()->{
+            try{
+                String result=WindowsSerial.detect();
+                SwingUtilities.invokeLater(()->{
+                    if(result.startsWith("FOUND|")){
+                        String[] parts=result.split("\\|",3);
+                        detectedPort=parts[1]; detectedVersion=parts.length>2?parts[2]:"Betaflight";
+                        fCom.setText(detectedPort);
+                        status.setText("FC: "+detectedPort+" · "+detectedVersion);
+                        JOptionPane.showMessageDialog(this,"Знайдено FC на "+detectedPort+"\n"+detectedVersion+"\n\nПеред відправкою перевірте налаштування UART та VTX.");
+                    }else{
+                        status.setText("FC не знайдено");
+                        JOptionPane.showMessageDialog(this,"Контролер не знайдено. Перевірте USB-кабель, драйвери та закрийте Betaflight Configurator.\n"+result);
+                    }
+                });
+            }catch(Exception e){SwingUtilities.invokeLater(()->error(e));}
+        },"fc-autodetect").start();
+    }
+
     void sendToFc(){
         if(!System.getProperty("os.name").toLowerCase(Locale.ROOT).contains("win")){error(new IOException("Send to FC is available in the Windows build."));return;}
-        String com=JOptionPane.showInputDialog(this,"COM port:",fCom.getText());
+        if(detectedPort.isBlank()){
+            JOptionPane.showMessageDialog(this,"Спочатку натисніть «Знайти FC автоматично». Без визначення FC відправка заблокована.");return;
+        }
+        String com=detectedPort;
         if(com==null||com.isBlank())return;
         final String port=com.trim();
         fCom.setText(port);
@@ -254,7 +283,7 @@ RX — протоколи
         String cli=buildCli(collect());
         if(cli.endsWith("save\n"))cli=cli.substring(0,cli.length()-5);
         final String commands=cli;
-        int ok=JOptionPane.showConfirmDialog(this,"Send VTX CLI to "+port+"?\nThis can change the FC port configuration and may reboot it.","Send to FC",JOptionPane.YES_NO_OPTION,JOptionPane.WARNING_MESSAGE);
+        int ok=JOptionPane.showConfirmDialog(this,"FC: "+detectedVersion+" ("+port+")\n\nВідправити команди? Перед цим збережіть резервну копію в Betaflight.\nЗміна UART може порушити керування VTX.","Send to FC",JOptionPane.YES_NO_OPTION,JOptionPane.WARNING_MESSAGE);
         if(ok!=JOptionPane.YES_OPTION)return;
         new Thread(()->{try{
             String payload="#\n"+commands+"\n"+(doSave?"save\n":"exit noreboot\n");
@@ -264,80 +293,52 @@ RX — протоколи
     }
 
     static final class WindowsSerial{
+        static String detect() throws Exception {
+            String script="""
+$ErrorActionPreference='Stop'
+$ports=[System.IO.Ports.SerialPort]::GetPortNames() | Sort-Object
+if (-not $ports) { Write-Output 'NOT_FOUND|Немає COM-портів'; exit 0 }
+foreach($name in $ports) {
+  $sp=$null
+  try {
+    $sp=[System.IO.Ports.SerialPort]::new($name,115200,'None',8,'One')
+    $sp.ReadTimeout=350; $sp.WriteTimeout=800
+    $sp.DtrEnable=$false; $sp.RtsEnable=$false
+    $sp.Open(); Start-Sleep -Milliseconds 200
+    $sp.DiscardInBuffer(); $sp.Write("#`r`n"); Start-Sleep -Milliseconds 250
+    $sp.Write("version`r`n")
+    $reply=''; $until=(Get-Date).AddSeconds(2)
+    while((Get-Date) -lt $until) {
+      Start-Sleep -Milliseconds 100
+      $reply += $sp.ReadExisting()
+      if($reply -match '(?i)Betaflight.*(\\d+\\.\\d+\\.\\d+)') { break }
+    }
+    if($reply -match '(?im)(Betaflight[^\r\n]*)') {
+      $version=$Matches[1].Trim()
+      try { $sp.Write("exit`r`n") } catch {}
+      Write-Output ('FOUND|'+$name+'|'+$version); exit 0
+    }
+    try { $sp.Write("exit`r`n") } catch {}
+  } catch {} finally { if($null -ne $sp){try{$sp.Close();$sp.Dispose()}catch{}} }
+}
+Write-Output 'NOT_FOUND|COM-порти є, але Betaflight не відповів. Можливо, порт зайнятий.'
+""";
+            String encoded=Base64.getEncoder().encodeToString(script.getBytes(StandardCharsets.UTF_16LE));
+            Process process=new ProcessBuilder("powershell.exe","-NoProfile","-NonInteractive","-EncodedCommand",encoded).redirectErrorStream(true).start();
+            boolean finished=process.waitFor(45,TimeUnit.SECONDS);
+            if(!finished){process.destroyForcibly();throw new IOException("Час пошуку FC вичерпано");}
+            String output=new String(process.getInputStream().readAllBytes(),StandardCharsets.UTF_8).trim();
+            for(String line:output.split("\\R"))if(line.startsWith("FOUND|")||line.startsWith("NOT_FOUND|"))return line;
+            return "NOT_FOUND|"+output;
+        }
         static String send(String port,String data,long timeoutMs)throws Exception{String p=port.toUpperCase(Locale.ROOT);if(!p.matches("COM\\d+"))throw new IOException("Некоректний COM-порт: "+port);Process mode=new ProcessBuilder("cmd","/c","mode",p+":","BAUD=115200","PARITY=N","DATA=8","STOP=1").redirectErrorStream(true).start();mode.waitFor(3,TimeUnit.SECONDS);try(FileInputStream in=new FileInputStream("\\\\.\\"+p);FileOutputStream out=new FileOutputStream("\\\\.\\"+p)){out.write(data.getBytes(StandardCharsets.US_ASCII));out.flush();long end=System.currentTimeMillis()+timeoutMs;ByteArrayOutputStream buf=new ByteArrayOutputStream();byte[] b=new byte[1024];while(System.currentTimeMillis()<end){while(in.available()>0){int n=in.read(b);if(n>0)buf.write(b,0,n);}if(buf.size()>0&&new String(buf.toByteArray(),StandardCharsets.US_ASCII).contains("#"))break;Thread.sleep(20);}return buf.toString(StandardCharsets.US_ASCII);}}
     }
 
     static Path resolveDataFile(){String os=System.getProperty("os.name").toLowerCase();Path base;if(os.contains("win")){String a=System.getenv("APPDATA");base=a!=null?Path.of(a):Path.of(System.getProperty("user.home"));}else if(os.contains("mac"))base=Path.of(System.getProperty("user.home"),"Library","Application Support");else{String x=System.getenv("XDG_CONFIG_HOME");base=x!=null?Path.of(x):Path.of(System.getProperty("user.home"),".config");}Path d=base.resolve(APP_NAME);try{Files.createDirectories(d);}catch(IOException ignored){}return d.resolve("vtx_configs.json");}
     void load(){dataFile=resolveDataFile();if(!Files.exists(dataFile))return;try{configs.addAll(Json.toConfigs(Files.readString(dataFile,StandardCharsets.UTF_8)));status.setText("Завантажено конфігурацій: "+configs.size());}catch(Exception e){status.setText("Колекцію не прочитано: "+e.getMessage());}}
     void persist(){try{Files.writeString(dataFile,Json.stringify(configs),StandardCharsets.UTF_8,StandardOpenOption.CREATE,StandardOpenOption.TRUNCATE_EXISTING,StandardOpenOption.WRITE);}catch(IOException e){status.setText("Не збережено: "+e.getMessage());}}
-    // Use high-contrast, Windows-safe colors for native Swing controls.
-    void setDarkTheme(boolean dark){
-        Color bg=dark?new Color(22,31,46):UIManager.getColor("Panel.background");
-        Color fg=dark?new Color(245,248,255):UIManager.getColor("Label.foreground");
-        for(Window w:Window.getWindows()){
-            applyColors(w,bg,fg,dark);
-            SwingUtilities.updateComponentTreeUI(w);
-            // updateComponentTreeUI resets some native renderers; apply again.
-            applyColors(w,bg,fg,dark);
-            w.repaint();
-        }
-    }
-    void applyColors(Component c,Color bg,Color fg,boolean dark){
-        final Color inputBg=Color.WHITE;
-        final Color inputFg=Color.BLACK;
-        final Color selectionBg=new Color(39,96,165);
-        if(c instanceof JPanel || c instanceof JScrollPane || c instanceof JViewport){
-            c.setBackground(bg);
-        }
-        if(c instanceof JLabel label){
-            if(label!=selectedPhoto && !label.isOpaque())label.setForeground(fg);
-        }
-        if(c instanceof JCheckBox check){
-            check.setOpaque(true);
-            check.setBackground(bg);
-            check.setForeground(fg);
-            check.setFont(check.getFont().deriveFont(Font.BOLD));
-        }
-        if(c instanceof JComboBox<?> combo){
-            combo.setOpaque(true);
-            combo.setBackground(inputBg);
-            combo.setForeground(inputFg);
-            combo.setRenderer(new DefaultListCellRenderer(){
-                @Override public Component getListCellRendererComponent(JList<?> list,Object value,int index,boolean selected,boolean focus){
-                    JLabel item=(JLabel)super.getListCellRendererComponent(list,value,index,selected,focus);
-                    item.setOpaque(true);
-                    item.setBackground(selected?selectionBg:inputBg);
-                    item.setForeground(selected?Color.WHITE:inputFg);
-                    item.setFont(item.getFont().deriveFont(Font.BOLD));
-                    return item;
-                }
-            });
-            if(combo.isEditable() && combo.getEditor().getEditorComponent() instanceof JTextField editor){
-                editor.setBackground(inputBg);editor.setForeground(inputFg);editor.setCaretColor(inputFg);
-            }
-        }else if(c instanceof JSpinner spinner){
-            spinner.setBackground(inputBg);spinner.setForeground(inputFg);
-            if(spinner.getEditor() instanceof JSpinner.DefaultEditor editor){
-                JTextField field=editor.getTextField();
-                field.setBackground(inputBg);field.setForeground(inputFg);field.setCaretColor(inputFg);
-                field.setDisabledTextColor(Color.DARK_GRAY);
-            }
-        }else if(c instanceof JTextField || c instanceof JTextArea || c instanceof JList){
-            c.setBackground(dark?new Color(35,48,67):inputBg);
-            c.setForeground(dark?new Color(245,248,255):inputFg);
-            if(c instanceof JList<?> list){list.setSelectionBackground(selectionBg);list.setSelectionForeground(Color.WHITE);}
-        }
-        if(c instanceof Container co)for(Component child:co.getComponents())applyColors(child,bg,fg,dark);
-        // Spinner text fields and combo editor must stay dark-on-light even
-        // when recursively visited as ordinary JTextFields.
-        if(c instanceof JSpinner spinner && spinner.getEditor() instanceof JSpinner.DefaultEditor editor){
-            JTextField field=editor.getTextField();
-            field.setBackground(inputBg);field.setForeground(inputFg);field.setCaretColor(inputFg);
-        }
-        if(c instanceof JComboBox<?> combo && combo.isEditable() && combo.getEditor().getEditorComponent() instanceof JTextField editor){
-            editor.setBackground(inputBg);editor.setForeground(inputFg);editor.setCaretColor(inputFg);
-        }
-    }
+    void setDarkTheme(boolean dark){Color bg=dark?new Color(22,31,46):UIManager.getColor("Panel.background");Color fg=dark?new Color(235,235,235):UIManager.getColor("Label.foreground");for(Window w:Window.getWindows())applyColors(w,bg,fg,dark);}
+    void applyColors(Component c,Color bg,Color fg,boolean dark){if(c instanceof JPanel||c instanceof JScrollPane||c instanceof JViewport)c.setBackground(bg);if(c instanceof JLabel||c instanceof JCheckBox)c.setForeground(fg);if(c instanceof JTextField||c instanceof JTextArea||c instanceof JList||c instanceof JComboBox||c instanceof JSpinner){c.setBackground(dark?new Color(35,48,67):Color.WHITE);c.setForeground(fg);}if(c instanceof Container co)for(Component x:co.getComponents())applyColors(x,bg,fg,dark);c.repaint();}
 
     static final class Json{
         static String escape(String s){StringBuilder b=new StringBuilder();for(char c:s.toCharArray()){switch(c){case '\\'->b.append("\\\\");case '"'->b.append("\\\"");case '\n'->b.append("\\n");case '\r'->b.append("\\r");case '\t'->b.append("\\t");default->b.append(c);}}return b.toString();}
