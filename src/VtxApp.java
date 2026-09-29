@@ -83,6 +83,8 @@ public class VtxApp extends JFrame {
     final JLabel selectedPhoto=new JLabel("Додайте фото у каталозі",SwingConstants.CENTER);
     final JLabel selectedTitle=new JLabel("VTX не вибрано");
     final List<Device> devices=new ArrayList<>();
+    static final Set<String> siteModelKeys=new HashSet<>();
+    static boolean isSite(Config c){return siteModelKeys.contains(c.selectedVtx.toLowerCase(Locale.ROOT));}
     static Path catalogFile, photoDir;
     record Device(String maker,String model,String protocol,String image){
         public String toString(){return maker+" · "+model;}
@@ -93,7 +95,7 @@ public class VtxApp extends JFrame {
     final JTextArea out=new JTextArea(22,52); final JButton[] tabs=new JButton[3]; final JLabel status=new JLabel(" ");
 
     public VtxApp() {
-        super(APP_NAME+" 2.2.6 — офлайн-генератор"); setDefaultCloseOperation(EXIT_ON_CLOSE); setLayout(new BorderLayout(8,8));
+        super(APP_NAME+" 2.2.9 — офлайн-генератор"); setDefaultCloseOperation(EXIT_ON_CLOSE); setLayout(new BorderLayout(8,8));
         add(collectionPanel(),BorderLayout.WEST); add(centerPanel(),BorderLayout.CENTER); add(status,BorderLayout.SOUTH);
         initCatalog();
         load(); if(configs.isEmpty()) configs.add(new Config()); refreshList(); select(Math.min(idx,configs.size()-1));
@@ -158,6 +160,10 @@ public class VtxApp extends JFrame {
                 "# Імпортуйте перевірену таблицю цього VTX та підтвердіть версію SmartAudio.\n"+
                 "# CLI-команди для DP 3W навмисно не генеруються до перевірки.\n";
         }
+        if(isSite(c))return "# Імпортований профіль vtx.in.ua: "+c.selectedVtx+"\n"+
+            "# Протокол з каталогу: "+c.protocol+"\n"+
+            "# Таблиця частот і потужності для цієї моделі ще не перевірена.\n"+
+            "# CLI-команди заблоковані до перевірки конкретного VTX.\n";
         b.append("# VTX config: ").append(c.name).append('\n');b.append("# template: ").append(c.template.isEmpty()?"—":c.template).append(" | port: ").append(c.uart).append(" | protocol: ").append(c.protocol).append("\n\n");
         if(c.includePortSetup){
             b.append("# PORT SETUP: verified for Betaflight <= 2025.12; this replaces the function mask on the selected port.\n");
@@ -171,10 +177,12 @@ public class VtxApp extends JFrame {
         b.append("\n# power control\n");int base=c.steps.size();b.append("vtx ").append(base).append(' ').append(auxIndex(c.aux)).append(" 0 0 ").append(c.powers[0]).append(" 900 1100\n");b.append("vtx ").append(base+1).append(' ').append(auxIndex(c.aux)).append(" 0 0 ").append(c.powers[1]).append(" 1100 1400\n");b.append("vtx ").append(base+2).append(' ').append(auxIndex(c.aux)).append(" 0 0 ").append(c.powers[2]).append(" 1400 2100\n");b.append("save\n");return b.toString();}
 
     String buildTableCli(){Config c=collect();StringBuilder b=new StringBuilder();
+        if(isSite(c))return "# Імпортована модель: таблиця частот і потужності не перевірена.\n# Генерацію заблоковано.\n";
         if(isDp(c))return "# TBS Unify Pro32 DP 3W: таблиця потужності НЕ ПІДТВЕРДЖЕНА.\n"+
             "# Імпортуйте перевірену таблицю з FC або звірте з документацією / vtx_info.\n"+
             "# Програма навмисно не генерує вигаданих значень потужності.\n";b.append("vtxtable bands 5\nvtxtable channels 8\n");if(c.protocol.startsWith("IRC")){b.append("vtxtable powerlevels 5\nvtxtable powervalues 25 100 200 400 600\nvtxtable powerlabels 25 100 200 400 600\n");}else if(c.protocol.endsWith("2.1")){b.append("# SmartAudio 2.1 power values are model-specific. Query: vtx_info\n# Example only (verify against the VTX manufacturer / vtx_info before use):\n");b.append("vtxtable powerlevels 4\nvtxtable powervalues 14 20 26 30\nvtxtable powerlabels 25 100 400 800").append("\n");}else{b.append("vtxtable powerlevels 4\nvtxtable powervalues 0 1 2 3\nvtxtable powerlabels 25 200 500 800\n");}for(int code=1;code<=5;code++){String l=BAND_LETTER[code-1];b.append("vtxtable band ").append(code).append(" BOSCAM_").append(l).append(' ').append(l).append(" CUSTOM");for(int f:FREQS[code-1])b.append(' ').append(f);b.append('\n');}return b.toString();}
     String buildTableJson(Config c){StringBuilder b=new StringBuilder();
+        if(isSite(c))return "{\n  \"verified\": false,\n  \"warning\": \"Imported site model; table not verified\"\n}\n";
         if(isDp(c))return "{\n  \"model\": \"TBS Unify Pro32 DP 3W\",\n  \"verified\": false,\n  \"warning\": \"VTX power table not verified; no deployable table generated\"\n}\n";String[] labels=c.protocol.startsWith("IRC")?new String[]{"25","100","200","400","600"}:new String[]{"25","200","500","800"};int[] vals=c.protocol.startsWith("IRC")?new int[]{25,100,200,400,600}:c.protocol.endsWith("2.1")?new int[]{14,20,26,30}:new int[]{0,1,2,3};b.append("{\n  \"description\": \"").append(Json.escape(c.template.isEmpty()?c.name:c.template)).append("\",\n  \"version\": \"1.0\",\n  \"vtx_table\": {\n    \"bands_list\": [\n");for(int code=1;code<=5;code++){String l=BAND_LETTER[code-1];b.append("      { \"name\": \"BOSCAM_").append(l).append("\", \"letter\": \"").append(l).append("\", \"isFactoryBand\": false, \"frequencies\": [");for(int i=0;i<8;i++){if(i>0)b.append(", ");b.append(FREQS[code-1][i]);}b.append("] }").append(code<5?",\n":"\n");}b.append("    ],\n    \"power_levels_list\": [\n");for(int i=0;i<vals.length;i++)b.append("      { \"value\": ").append(vals[i]).append(", \"label\": \"").append(labels[i]).append("\" }").append(i+1<vals.length?",\n":"\n");b.append("    ],\n    \"band\": ").append(c.dband).append(",\n    \"channel\": ").append(c.dchan).append(",\n    \"power_level\": ").append(c.powers[Math.min(power,c.powers.length-1)]).append("\n  }\n}\n");return b.toString();}
     void setView(int k){view=k;for(int i=0;i<3;i++)tabs[i].setEnabled(i!=k);render();}void render(){Config c=collect();out.setText(view==1?buildTableCli():view==2?buildTableJson(c):buildCli(c));out.setCaretPosition(0);}
 
@@ -279,6 +287,59 @@ public class VtxApp extends JFrame {
             devices.add(new Device("TBS",DP_MODEL,"TBS SmartAudio (version to verify)",""));
             saveCatalog();
         }
+        // Merge bundled offline site catalog without replacing user-added models.
+        mergeOfflineSiteCatalog();
+    }
+    void mergeOfflineSiteCatalog(){
+        Path root=catalogFile.getParent();
+        Path seed=root.resolve("site_catalog.tsv");
+        Path packaged=applicationDirectory().resolve("app").resolve("catalog");
+        if(!Files.exists(seed)){
+            Path alternate=packaged.resolve("site_catalog.tsv");
+            if(Files.exists(alternate)){
+                try{
+                    Files.createDirectories(photoDir);
+                    Files.copy(alternate,seed);
+                    Path bundledPhotos=packaged.resolve("photos");
+                    if(Files.isDirectory(bundledPhotos))try(java.util.stream.Stream<Path> stream=Files.list(bundledPhotos)){
+                        for(Path pic:stream.filter(Files::isRegularFile).toList()){
+                            Path target=photoDir.resolve(pic.getFileName());
+                            if(!Files.exists(target))Files.copy(pic,target);
+                        }
+                    }
+                    Path details=packaged.resolve("site_details.json");
+                    if(Files.exists(details))Files.copy(details,root.resolve("site_details.json"),StandardCopyOption.REPLACE_EXISTING);
+                }catch(IOException ex){status.setText("Не вдалося встановити офлайн-каталог: "+ex.getMessage());}
+            }
+        }
+        if(!Files.exists(seed))return;
+        int added=0;
+        try{
+            for(String line:Files.readAllLines(seed,StandardCharsets.UTF_8)){
+                if(line.isBlank())continue;
+                String[] x=line.split("\t",-1);
+                if(x.length!=4)continue;
+                String maker=unb64(x[0]),model=unb64(x[1]),protocol=unb64(x[2]),photo=unb64(x[3]);
+                if(maker.isBlank()||model.isBlank())continue;
+                siteModelKeys.add((maker+" "+model).toLowerCase(Locale.ROOT));
+                boolean exists=devices.stream().anyMatch(d->d.maker().equalsIgnoreCase(maker)&&d.model().equalsIgnoreCase(model));
+                if(exists)continue;
+                if(!photo.isBlank()){
+                    Path dest=root.resolve(photo).normalize();
+                    if(!dest.startsWith(photoDir.normalize()))photo="";
+                    else if(!Files.exists(dest)){
+                        Path bundled=packaged.resolve(photo).normalize();
+                        if(Files.isRegularFile(bundled)){
+                            Files.createDirectories(dest.getParent());
+                            Files.copy(bundled,dest);
+                        }else photo="";
+                    }
+                }
+                devices.add(new Device(maker,model,protocol,resolvePhoto(photo)));
+                added++;
+            }
+            if(added>0)saveCatalog();
+        }catch(Exception ex){status.setText("Помилка імпорту офлайн-каталогу: "+ex.getMessage());}
     }
     static Path applicationDirectory(){
         String appPath=System.getProperty("jpackage.app-path", "");
@@ -330,6 +391,13 @@ public class VtxApp extends JFrame {
             if(d.maker().equals("TBS")&&d.model().equals(DP_MODEL)){
                 fUart.setSelectedItem("UART1");fProtocol.setSelectedItem("TBS SmartAudio 2.1");
                 fTable.setSelected(false);fPort.setSelected(false);
+            }
+            if(d.maker().equals("TBS")&&d.model().equals(DP_MODEL)){
+                // Dedicated DP profile above.
+            }else if(!d.protocol().equals("Перевірити за документацією") && !d.protocol().equals("Не перевірено")){
+                fTable.setSelected(false);fPort.setSelected(false);
+                if(d.protocol().equalsIgnoreCase("IRC Tramp"))fProtocol.setSelectedItem("IRC Tramp");
+                else if(d.protocol().toLowerCase(Locale.ROOT).contains("smart audio"))fProtocol.setSelectedItem("TBS SmartAudio 2.0");
             }
             loading=false;store();render();updateSelectedPhoto();dialog.dispose();
             if(d.maker().equals("TBS")&&d.model().equals(DP_MODEL))
