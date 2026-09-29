@@ -46,6 +46,7 @@ public class VtxApp extends JFrame {
         String aux = "AUX3";
         int dband = 5, dchan = 1;
         int[] powers = {0, 1, 2};
+        int[] powerMw = {0, 0, 0};
         String selectedVtx = "";
         boolean incTable = true;
         boolean includePortSetup = false;
@@ -61,7 +62,7 @@ public class VtxApp extends JFrame {
         Config copy() {
             Config c = new Config();
             c.name=name; c.selectedVtx=selectedVtx; c.template=template; c.uart=uart; c.protocol=protocol; c.aux=aux;
-            c.dband=dband; c.dchan=dchan; c.powers=powers.clone(); c.incTable=incTable;
+            c.dband=dband; c.dchan=dchan; c.powers=powers.clone(); c.powerMw=powerMw.clone(); c.incTable=incTable;
             c.includePortSetup=includePortSetup; c.steps=new ArrayList<>(steps); return c;
         }
     }
@@ -74,7 +75,9 @@ public class VtxApp extends JFrame {
     final JTextField fName=new JTextField(25), fTemplate=new JTextField(25), fCom=new JTextField("COM3",10);
     final JComboBox<String> fUart=new JComboBox<>(UARTS), fProtocol=new JComboBox<>(PROTOCOLS), fAux=new JComboBox<>(AUXES);
     final JComboBox<String> fBand=new JComboBox<>(BAND_LABEL), fChan=new JComboBox<>(new String[]{"1","2","3","4","5","6","7","8"});
-    final JSpinner sP1=new JSpinner(new SpinnerNumberModel(0,0,7,1)), sP2=new JSpinner(new SpinnerNumberModel(1,0,7,1)), sP3=new JSpinner(new SpinnerNumberModel(2,0,7,1));
+    final JComboBox<Integer> powerCount=new JComboBox<>(new Integer[]{3,4,5,6});
+    final JPanel powerRows=new JPanel(new GridLayout(0,3,5,3));
+    final JSpinner[] powerIndexes=new JSpinner[6], powerWatts=new JSpinner[6];
     final JCheckBox fTable=new JCheckBox("Увімкнути VTX-таблицю",true), fPort=new JCheckBox("Додати налаштування VTX-порту",false);
     final JCheckBox fSave=new JCheckBox("Після відправки виконати save",true);
     final DefaultListModel<String> listModel=new DefaultListModel<>(); final JList<String> list=new JList<>(listModel);
@@ -95,7 +98,7 @@ public class VtxApp extends JFrame {
     final JTextArea out=new JTextArea(22,52); final JButton[] tabs=new JButton[3]; final JLabel status=new JLabel(" ");
 
     public VtxApp() {
-        super(APP_NAME+" 2.3.2 — офлайн-генератор"); setDefaultCloseOperation(EXIT_ON_CLOSE); setLayout(new BorderLayout(8,8));
+        super(APP_NAME+" 2.3.3 — офлайн-генератор"); setDefaultCloseOperation(EXIT_ON_CLOSE); setLayout(new BorderLayout(8,8));
         add(collectionPanel(),BorderLayout.WEST); add(centerPanel(),BorderLayout.CENTER); add(status,BorderLayout.SOUTH);
         installWindowIcon();
         initCatalog();
@@ -132,18 +135,28 @@ public class VtxApp extends JFrame {
         rightTop.add(fcBar,BorderLayout.SOUTH);
         right.add(rightTop,BorderLayout.NORTH);
         out.setFont(new Font(Font.MONOSPACED,Font.PLAIN,12)); out.setEditable(false); right.add(new JScrollPane(out),BorderLayout.CENTER);
-        JPanel rb=new JPanel(new FlowLayout(FlowLayout.LEFT,4,4)); rb.add(btn("Копіювати",this::copyOut)); rb.add(btn("Зберегти файл",this::saveCurrent)); rb.add(btn("Зберегти всі три",this::saveAllThree)); rb.add(btn("Каталог з фото",this::showCatalog)); rb.add(btn("Темна тема",()->setDarkTheme(true))); rb.add(btn("Світла тема",()->setDarkTheme(false))); right.add(rb,BorderLayout.SOUTH);
+        JPanel rb=new JPanel(new FlowLayout(FlowLayout.LEFT,4,4)); rb.add(btn("Копіювати",this::copyOut)); rb.add(btn("Зберегти файл",this::saveCurrent)); rb.add(btn("Зберегти всі три",this::saveAllThree)); rb.add(btn("Темна тема",()->setDarkTheme(true))); rb.add(btn("Світла тема",()->setDarkTheme(false))); right.add(rb,BorderLayout.SOUTH);
         JPanel c=new JPanel(new GridLayout(1,2,8,8)); c.add(mid); c.add(right); return c;
     }
     JPanel form(){
         JPanel p=new JPanel(new GridBagLayout()); GridBagConstraints g=new GridBagConstraints(); g.insets=new Insets(3,7,3,7); g.anchor=GridBagConstraints.WEST; int y=0;
         addRow(p,g,y++,"Назва:",fName); addRow(p,g,y++,"Шаблон VTX:",fTemplate); addRow(p,g,y++,"Послідовний порт:",fUart); addRow(p,g,y++,"Протокол:",fProtocol); addRow(p,g,y++,"AUX керування VTX:",fAux); addRow(p,g,y++,"Типовий діапазон:",fBand); addRow(p,g,y++,"Типовий канал:",fChan);
-        g.gridy=y++; g.gridx=0;p.add(new JLabel("Стани потужності:"),g); JPanel pw=new JPanel(new FlowLayout(FlowLayout.LEFT,4,0));pw.add(sP1);pw.add(sP2);pw.add(sP3);g.gridx=1;p.add(pw,g);
+        g.gridy=y++; g.gridx=0;p.add(new JLabel("Стани потужності:"),g); JPanel pw=new JPanel(new BorderLayout(4,4));pw.add(powerCount,BorderLayout.NORTH);
+        for(int i=0;i<6;i++){final int n=i;powerIndexes[i]=new JSpinner(new SpinnerNumberModel(i,0,7,1));powerWatts[i]=new JSpinner(new SpinnerNumberModel(0,0,10000,25));}
+        pw.add(powerRows,BorderLayout.CENTER);JLabel note=new JLabel("мВт — довідкове значення, не записується у FC");note.setFont(note.getFont().deriveFont(10f));pw.add(note,BorderLayout.SOUTH);
+        g.gridx=1;p.add(pw,g);
         g.gridy=y++;g.gridx=0;p.add(new JLabel("VTX-таблиця:"),g);g.gridx=1;p.add(fTable,g);
         g.gridy=y++;g.gridx=0;p.add(new JLabel("Порт у CLI:"),g);g.gridx=1;p.add(fPort,g);
         Runnable live=()->{if(!loading){store();render();}}; fName.getDocument().addDocumentListener(new SimpleDoc(live));fTemplate.getDocument().addDocumentListener(new SimpleDoc(live));
-        for(JComboBox<?> c:List.of(fUart,fProtocol,fAux,fBand,fChan))c.addActionListener(e->live.run()); for(JSpinner s:List.of(sP1,sP2,sP3))s.addChangeListener(e->live.run()); fTable.addActionListener(e->live.run());fPort.addActionListener(e->live.run());
+        for(JComboBox<?> c:List.of(fUart,fProtocol,fAux,fBand,fChan))c.addActionListener(e->live.run()); for(JSpinner s:powerIndexes)s.addChangeListener(e->live.run()); for(JSpinner s:powerWatts)s.addChangeListener(e->live.run());
+        powerCount.addActionListener(e->{rebuildPowerRows();live.run();});rebuildPowerRows(); fTable.addActionListener(e->live.run());fPort.addActionListener(e->live.run());
         return p;
+    }
+    void rebuildPowerRows(){
+        powerRows.removeAll();powerRows.add(new JLabel("Рівень"));powerRows.add(new JLabel("CLI індекс"));powerRows.add(new JLabel("Потужність, мВт"));
+        int count=(Integer)powerCount.getSelectedItem();
+        for(int i=0;i<count;i++){powerRows.add(new JLabel(String.valueOf(i+1)));powerRows.add(powerIndexes[i]);powerRows.add(powerWatts[i]);}
+        powerRows.revalidate();powerRows.repaint();
     }
     static void addRow(JPanel p,GridBagConstraints g,int y,String label,JComponent c){g.gridy=y;g.gridx=0;p.add(new JLabel(label),g);g.gridx=1;p.add(c,g);}
     JPanel stepsTable(){
@@ -154,10 +167,10 @@ public class VtxApp extends JFrame {
     static JButton btn(String t,Runnable r){JButton b=new JButton(t);b.addActionListener(e->r.run());return b;}
     static class SimpleDoc implements DocumentListener{final Runnable r;SimpleDoc(Runnable r){this.r=r;}public void insertUpdate(DocumentEvent e){r.run();}public void removeUpdate(DocumentEvent e){r.run();}public void changedUpdate(DocumentEvent e){r.run();}}
 
-    Config collect(){Config c=new Config();c.selectedVtx=selectedVtx;c.name=fName.getText().trim().isEmpty()?"Без назви":fName.getText().trim();c.template=fTemplate.getText().trim();c.uart=(String)fUart.getSelectedItem();c.protocol=(String)fProtocol.getSelectedItem();c.aux=(String)fAux.getSelectedItem();c.dband=bandCode((String)fBand.getSelectedItem(),5);c.dchan=Integer.parseInt((String)fChan.getSelectedItem());c.powers=new int[]{(int)sP1.getValue(),(int)sP2.getValue(),(int)sP3.getValue()};c.incTable=fTable.isSelected();c.includePortSetup=fPort.isSelected();c.steps=new ArrayList<>();for(int r=0;r<6;r++)c.steps.add(new BandStep((String)stAux[r].getSelectedItem(),bandCode((String)stBand[r].getSelectedItem(),0),Integer.parseInt((String)stChan[r].getSelectedItem()),(int)stStart[r].getValue(),(int)stEnd[r].getValue()));return c;}
+    Config collect(){Config c=new Config();c.selectedVtx=selectedVtx;c.name=fName.getText().trim().isEmpty()?"Без назви":fName.getText().trim();c.template=fTemplate.getText().trim();c.uart=(String)fUart.getSelectedItem();c.protocol=(String)fProtocol.getSelectedItem();c.aux=(String)fAux.getSelectedItem();c.dband=bandCode((String)fBand.getSelectedItem(),5);c.dchan=Integer.parseInt((String)fChan.getSelectedItem());int count=(Integer)powerCount.getSelectedItem();c.powers=new int[count];c.powerMw=new int[count];for(int i=0;i<count;i++){c.powers[i]=(int)powerIndexes[i].getValue();c.powerMw[i]=(int)powerWatts[i].getValue();}c.incTable=fTable.isSelected();c.includePortSetup=fPort.isSelected();c.steps=new ArrayList<>();for(int r=0;r<6;r++)c.steps.add(new BandStep((String)stAux[r].getSelectedItem(),bandCode((String)stBand[r].getSelectedItem(),0),Integer.parseInt((String)stChan[r].getSelectedItem()),(int)stStart[r].getValue(),(int)stEnd[r].getValue()));return c;}
     static int bandCode(String s,int d){try{return Integer.parseInt(s.split(" ")[0]);}catch(Exception e){return d;}}
     static int auxIndex(String a){try{return Integer.parseInt(a.replace("AUX",""))-1;}catch(Exception e){return 0;}}
-    void select(int i){if(i<0||i>=configs.size())return;idx=i;loading=true;Config c=configs.get(i);selectedVtx=c.selectedVtx;fName.setText(c.name);fTemplate.setText(c.template);fUart.setSelectedItem(c.uart);fProtocol.setSelectedItem(c.protocol);fAux.setSelectedItem(c.aux);fBand.setSelectedItem(BAND_LABEL[Math.max(0,Math.min(5,c.dband))]);fChan.setSelectedItem(String.valueOf(c.dchan));sP1.setValue(c.powers[0]);sP2.setValue(c.powers[1]);sP3.setValue(c.powers[2]);fTable.setSelected(c.incTable);fPort.setSelected(c.includePortSetup);for(int r=0;r<6;r++){BandStep s=c.steps.get(r);stAux[r].setSelectedItem(s.aux());stBand[r].setSelectedItem(BAND_LABEL[Math.max(0,Math.min(5,s.band()))]);stChan[r].setSelectedItem(String.valueOf(s.channel()));stStart[r].setValue(s.start());stEnd[r].setValue(s.end());}loading=false;list.setSelectedIndex(i);render();updateSelectedPhoto();}
+    void select(int i){if(i<0||i>=configs.size())return;idx=i;loading=true;Config c=configs.get(i);selectedVtx=c.selectedVtx;fName.setText(c.name);fTemplate.setText(c.template);fUart.setSelectedItem(c.uart);fProtocol.setSelectedItem(c.protocol);fAux.setSelectedItem(c.aux);fBand.setSelectedItem(BAND_LABEL[Math.max(0,Math.min(5,c.dband))]);fChan.setSelectedItem(String.valueOf(c.dchan));powerCount.setSelectedItem(Math.max(3,Math.min(6,c.powers.length)));for(int pi=0;pi<6;pi++){powerIndexes[pi].setValue(pi<c.powers.length?c.powers[pi]:pi);powerWatts[pi].setValue(pi<c.powerMw.length?c.powerMw[pi]:0);}rebuildPowerRows();fTable.setSelected(c.incTable);fPort.setSelected(c.includePortSetup);for(int r=0;r<6;r++){BandStep s=c.steps.get(r);stAux[r].setSelectedItem(s.aux());stBand[r].setSelectedItem(BAND_LABEL[Math.max(0,Math.min(5,s.band()))]);stChan[r].setSelectedItem(String.valueOf(s.channel()));stStart[r].setValue(s.start());stEnd[r].setValue(s.end());}loading=false;list.setSelectedIndex(i);render();updateSelectedPhoto();}
 
     String buildCli(Config c){StringBuilder b=new StringBuilder();
         if(isDp(c)){
@@ -180,9 +193,9 @@ public class VtxApp extends JFrame {
             b.append("# For Betaflight 2026.12+, do not paste the serial line above; use:\n");
             b.append("# set vtx_uart = ").append(c.uart).append("\n\n");
         }
-        b.append("set vtx_band = ").append(c.dband).append('\n');b.append("set vtx_channel = ").append(c.dchan).append('\n');b.append("set vtx_power = ").append(c.powers[Math.max(0,Math.min(power,c.powers.length-1))]).append("\n");b.append("# power states: 1=").append(c.powers[0]).append(" 2=").append(c.powers[1]).append(" 3=").append(c.powers[2]).append("\n\n");
+        b.append("set vtx_band = ").append(c.dband).append('\n');b.append("set vtx_channel = ").append(c.dchan).append('\n');b.append("set vtx_power = ").append(c.powers[Math.max(0,Math.min(power,c.powers.length-1))]).append("\n");b.append("# power states (CLI index / reference mW):");for(int pi=0;pi<c.powers.length;pi++)b.append(" ").append(pi+1).append("=").append(c.powers[pi]).append("/").append(c.powerMw[pi]).append("mW");b.append("\n\n");
         b.append("# 6-position band control\n");for(int i=0;i<c.steps.size();i++){BandStep s=c.steps.get(i);b.append("vtx ").append(i).append(' ').append(auxIndex(s.aux())).append(' ').append(s.band()).append(' ').append(s.channel()).append(' ').append(s.band()==0?0:c.powers[Math.min(power,c.powers.length-1)]).append(' ').append(s.start()).append(' ').append(s.end()).append('\n');}
-        b.append("\n# power control\n");int base=c.steps.size();b.append("vtx ").append(base).append(' ').append(auxIndex(c.aux)).append(" 0 0 ").append(c.powers[0]).append(" 900 1100\n");b.append("vtx ").append(base+1).append(' ').append(auxIndex(c.aux)).append(" 0 0 ").append(c.powers[1]).append(" 1100 1400\n");b.append("vtx ").append(base+2).append(' ').append(auxIndex(c.aux)).append(" 0 0 ").append(c.powers[2]).append(" 1400 2100\n");b.append("save\n");return b.toString();}
+        b.append("\n# power control (review AUX ranges before use)\n");int base=c.steps.size();for(int pi=0;pi<c.powers.length;pi++){int lo=c.powers.length==3?new int[]{900,1100,1400}[pi]:900+(1200*pi/c.powers.length),hi=c.powers.length==3?new int[]{1100,1400,2100}[pi]:(pi==c.powers.length-1?2100:900+(1200*(pi+1)/c.powers.length));b.append("vtx ").append(base+pi).append(' ').append(auxIndex(c.aux)).append(" 0 0 ").append(c.powers[pi]).append(' ').append(lo).append(' ').append(hi).append('\n');}b.append("save\n");return b.toString();}
 
     String buildTableCli(){Config c=collect();StringBuilder b=new StringBuilder();
         if(isSite(c))return "# Імпортована модель: таблиця частот і потужності не перевірена.\n# Генерацію заблоковано.\n";
@@ -238,8 +251,8 @@ public class VtxApp extends JFrame {
 
     JPanel selectedPanel(){
         JPanel card=new JPanel(new BorderLayout(10,4));card.setBorder(BorderFactory.createCompoundBorder(BorderFactory.createLineBorder(new Color(75,75,75),1,true),BorderFactory.createEmptyBorder(8,12,8,12)));
-        selectedPhoto.setPreferredSize(new Dimension(145,105)); selectedPhoto.setOpaque(true);selectedPhoto.setBackground(new Color(25,25,25));
-        selectedPhoto.setForeground(new Color(185,185,185));card.add(selectedPhoto,BorderLayout.WEST);
+        selectedPhoto.setPreferredSize(new Dimension(145,105)); selectedPhoto.setOpaque(true);selectedPhoto.putClientProperty("vtx.whitePhoto",Boolean.TRUE);selectedPhoto.setBackground(Color.WHITE);
+        selectedPhoto.setForeground(new Color(65,65,65));card.add(selectedPhoto,BorderLayout.WEST);
         JPanel info=new JPanel(new BorderLayout(4,4));JLabel caption=new JLabel("ОБРАНИЙ ПЕРЕДАВАЧ");caption.setForeground(new Color(220,220,220));info.add(caption,BorderLayout.NORTH);
         selectedTitle.setFont(selectedTitle.getFont().deriveFont(Font.BOLD,16f));info.add(selectedTitle,BorderLayout.CENTER);
         info.add(btn("Відкрити каталог / змінити фото",this::showCatalog),BorderLayout.SOUTH);card.add(info,BorderLayout.CENTER);
@@ -411,53 +424,33 @@ public class VtxApp extends JFrame {
         selectedPhoto.setIcon(icon);selectedPhoto.setText(icon==null?"Немає фото":"");
     }
     void showCatalog(){
-        JDialog dialog=new JDialog(this,"Каталог VTX — фотографії",true);dialog.setSize(920,650);dialog.setLocationRelativeTo(this);
+        JDialog dialog=new JDialog(this,"Каталог VTX — фотографії",true);dialog.setSize(1120,730);dialog.setMinimumSize(new Dimension(850,550));dialog.setLocationRelativeTo(this);
         DefaultListModel<Device> model=new DefaultListModel<>();for(Device d:devices)model.addElement(d);
         JList<Device> devList=new JList<>(model);devList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
-        JTextField search=new JTextField();search.putClientProperty("JTextField.placeholderText","Наприклад: TBS або Pro32");
-        JPanel left=new JPanel(new BorderLayout(5,5));
-        JPanel searchPanel=new JPanel(new BorderLayout(3,3));
-        searchPanel.add(new JLabel("Пошук за виробником або моделлю:"),BorderLayout.NORTH);
-        searchPanel.add(search,BorderLayout.CENTER);
-        JLabel resultCount=new JLabel("Знайдено моделей: "+model.size());
-        searchPanel.add(resultCount,BorderLayout.SOUTH);
-        left.add(searchPanel,BorderLayout.NORTH);
-        left.add(new JScrollPane(devList),BorderLayout.CENTER);left.setPreferredSize(new Dimension(300,400));
-        JLabel image=new JLabel("Фото ще не додано",SwingConstants.CENTER);image.setPreferredSize(new Dimension(440,350));image.setOpaque(true);image.setBackground(new Color(25,25,25));image.setForeground(Color.WHITE);
-        JLabel info=new JLabel("Оберіть передавач");JPanel detail=new JPanel(new BorderLayout(5,5));detail.add(image,BorderLayout.CENTER);detail.add(info,BorderLayout.SOUTH);
-        Runnable refresh=()->{Device d=devList.getSelectedValue();if(d==null){image.setIcon(null);image.setText("Оберіть VTX");info.setText(" ");return;}ImageIcon icon=thumbnail(d.image(),440,350);image.setIcon(icon);image.setText(icon==null?"Фото ще не додано":"");info.setText("<html><b>"+html(d.toString())+"</b><br>Протокол: "+html(d.protocol())+"</html>");};
+        JTextField search=new JTextField();search.setToolTipText("Виробник, модель або протокол");
+        JPanel left=new JPanel(new BorderLayout(8,8));left.setBorder(BorderFactory.createEmptyBorder(12,12,12,8));
+        JPanel searchPanel=new JPanel(new BorderLayout(4,4));searchPanel.add(new JLabel("ПОШУК VTX"),BorderLayout.NORTH);searchPanel.add(search,BorderLayout.CENTER);
+        JLabel resultCount=new JLabel("Знайдено моделей: "+model.size());searchPanel.add(resultCount,BorderLayout.SOUTH);
+        left.add(searchPanel,BorderLayout.NORTH);left.add(new JScrollPane(devList),BorderLayout.CENTER);left.setPreferredSize(new Dimension(330,500));
+        JLabel image=new JLabel("Оберіть передавач",SwingConstants.CENTER);image.setOpaque(true);image.putClientProperty("vtx.whitePhoto",Boolean.TRUE);image.setBackground(Color.WHITE);image.setForeground(new Color(70,70,70));
+        JPanel photoFrame=new JPanel(new BorderLayout());photoFrame.setBorder(BorderFactory.createEmptyBorder(10,10,10,10));photoFrame.add(image,BorderLayout.CENTER);
+        JLabel title=new JLabel("Оберіть передавач");title.setFont(title.getFont().deriveFont(Font.BOLD,20f));
+        JLabel maker=new JLabel("Виробник: —"),proto=new JLabel("Протокол: —"),photoStatus=new JLabel("Фото: —");
+        JPanel metadata=new JPanel(new GridLayout(0,1,4,5));metadata.setBorder(BorderFactory.createEmptyBorder(12,14,12,14));metadata.add(title);metadata.add(maker);metadata.add(proto);metadata.add(photoStatus);
+        JPanel detail=new JPanel(new BorderLayout(6,6));detail.setBorder(BorderFactory.createEmptyBorder(12,8,12,12));detail.add(photoFrame,BorderLayout.CENTER);detail.add(metadata,BorderLayout.SOUTH);
+        Runnable refresh=()->{Device d=devList.getSelectedValue();if(d==null){image.setIcon(null);image.setText("Оберіть VTX");title.setText("Оберіть передавач");maker.setText("Виробник: —");proto.setText("Протокол: —");photoStatus.setText("Фото: —");return;}
+            int w=Math.max(300,image.getWidth()-24),h=Math.max(220,image.getHeight()-24);ImageIcon icon=thumbnail(d.image(),w,h);image.setIcon(icon);image.setText(icon==null?"Фото ще не додано":"");title.setText(d.model());maker.setText("Виробник: "+d.maker());proto.setText("Протокол: "+d.protocol());photoStatus.setText(icon==null?"Фото: відсутнє":"Фото: локальний каталог");};
         devList.addListSelectionListener(e->{if(!e.getValueIsAdjusting())refresh.run();});
-        search.getDocument().addDocumentListener(new SimpleDoc(()->{
-            String q=search.getText().trim().toLowerCase(Locale.ROOT);
-            model.clear();for(Device d:devices)if(d.toString().toLowerCase(Locale.ROOT).contains(q))model.addElement(d);
-            resultCount.setText("Знайдено моделей: "+model.size());
-            if(!model.isEmpty())devList.setSelectedIndex(0);else refresh.run();
-        }));
+        image.addComponentListener(new java.awt.event.ComponentAdapter(){public void componentResized(java.awt.event.ComponentEvent e){if(devList.getSelectedValue()!=null)refresh.run();}});
+        search.getDocument().addDocumentListener(new SimpleDoc(()->{String q=search.getText().trim().toLowerCase(Locale.ROOT);Device selected=devList.getSelectedValue();model.clear();for(Device d:devices)if((d.toString()+" "+d.protocol()).toLowerCase(Locale.ROOT).contains(q))model.addElement(d);resultCount.setText("Знайдено моделей: "+model.size());if(selected!=null&&model.contains(selected))devList.setSelectedValue(selected,true);else if(!model.isEmpty())devList.setSelectedIndex(0);else refresh.run();}));
         JPanel actions=new JPanel(new FlowLayout(FlowLayout.LEFT,6,6));
-        actions.add(btn("Обрати для конфігурації",()->{Device d=devList.getSelectedValue();if(d==null)return;selectedVtx=d.toString();loading=true;fTemplate.setText(d.model());
-            if(d.maker().equals("TBS")&&d.model().equals(DP_MODEL)){
-                fUart.setSelectedItem("UART1");fProtocol.setSelectedItem("TBS SmartAudio 2.1");
-                fTable.setSelected(false);fPort.setSelected(false);
-            }
-            if(d.maker().equals("TBS")&&d.model().equals(DP_MODEL)){
-                // Dedicated DP profile above.
-            }else if(!d.protocol().equals("Перевірити за документацією") && !d.protocol().equals("Не перевірено")){
-                fTable.setSelected(false);fPort.setSelected(false);
-                if(d.protocol().equalsIgnoreCase("IRC Tramp"))fProtocol.setSelectedItem("IRC Tramp");
-                else if(d.protocol().toLowerCase(Locale.ROOT).contains("smart audio"))fProtocol.setSelectedItem("TBS SmartAudio 2.0");
-            }
-            loading=false;store();render();updateSelectedPhoto();dialog.dispose();
-            if(d.maker().equals("TBS")&&d.model().equals(DP_MODEL))
-                JOptionPane.showMessageDialog(this,"Профіль TBS Unify Pro32 DP 3W обрано.\nUART1 (TX1), SmartAudio 2.1 (попередньо) — перевірити версію за VTX.\nАвтоматичну VTX-таблицю і команди порту вимкнено:\nрівні потужності треба звірити з vtx_info або інструкцією.\nВкладки CLI оновлено. Жодних команд на FC не відправлено.","Профіль DP 3W — безпечний режим",JOptionPane.INFORMATION_MESSAGE);}));
-        actions.add(btn("Додати модель",()->{JTextField maker=new JTextField(),name=new JTextField(),proto=new JTextField("Не перевірено");JPanel form=new JPanel(new GridLayout(0,1,3,3));form.add(new JLabel("Виробник:"));form.add(maker);form.add(new JLabel("Модель:"));form.add(name);form.add(new JLabel("Протокол (якщо відомий):"));form.add(proto);if(JOptionPane.showConfirmDialog(dialog,form,"Нова модель",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION)return;if(maker.getText().isBlank()||name.getText().isBlank()){JOptionPane.showMessageDialog(dialog,"Вкажіть виробника й модель");return;}Device d=new Device(maker.getText().trim(),name.getText().trim(),proto.getText().trim(),"");devices.add(d);saveCatalog();model.addElement(d);devList.setSelectedValue(d,true);}));
-        actions.add(btn("Додати / замінити фото",()->{Device d=devList.getSelectedValue();if(d==null)return;File chosen=chooseFile(dialog,false,null,"photos");if(chosen==null)return;try{Path source=chosen.toPath();if(ImageIO.read(source.toFile())==null)throw new IOException("Формат зображення не підтримується. Використайте JPG або PNG.");String ext=source.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".png")?".png":".jpg";Path dest=Files.createTempFile(photoDir,"vtx_",ext);Files.copy(source,dest,StandardCopyOption.REPLACE_EXISTING);int pos=devices.indexOf(d);Device updated=new Device(d.maker(),d.model(),d.protocol(),dest.toString());devices.set(pos,updated);int selected=devList.getSelectedIndex();model.set(selected,updated);devList.setSelectedIndex(selected);saveCatalog();refresh.run();updateSelectedPhoto();}catch(Exception ex){JOptionPane.showMessageDialog(dialog,ex.getMessage(),"Помилка фото",JOptionPane.ERROR_MESSAGE);}}));
+        actions.add(btn("Обрати для конфігурації",()->{Device d=devList.getSelectedValue();if(d==null)return;selectedVtx=d.toString();loading=true;fTemplate.setText(d.model());if(d.maker().equals("TBS")&&d.model().equals(DP_MODEL)){fUart.setSelectedItem("UART1");fProtocol.setSelectedItem("TBS SmartAudio 2.1");fTable.setSelected(false);fPort.setSelected(false);}else if(!d.protocol().equals("Перевірити за документацією")&&!d.protocol().equals("Не перевірено")){fTable.setSelected(false);fPort.setSelected(false);if(d.protocol().equalsIgnoreCase("IRC Tramp"))fProtocol.setSelectedItem("IRC Tramp");else if(d.protocol().toLowerCase(Locale.ROOT).contains("smart audio"))fProtocol.setSelectedItem("TBS SmartAudio 2.0");}loading=false;store();render();updateSelectedPhoto();dialog.dispose();if(d.maker().equals("TBS")&&d.model().equals(DP_MODEL))JOptionPane.showMessageDialog(this,"Профіль DP 3W обрано. Таблиця потужності не перевірена; запис на FC заблоковано.");}));
+        actions.add(btn("Додати модель",()->{JTextField mf=new JTextField(),name=new JTextField(),p=new JTextField("Не перевірено");JPanel form=new JPanel(new GridLayout(0,1,3,3));form.add(new JLabel("Виробник:"));form.add(mf);form.add(new JLabel("Модель:"));form.add(name);form.add(new JLabel("Протокол:"));form.add(p);if(JOptionPane.showConfirmDialog(dialog,form,"Нова модель",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION)return;if(mf.getText().isBlank()||name.getText().isBlank())return;Device d=new Device(mf.getText().trim(),name.getText().trim(),p.getText().trim(),"");devices.add(d);saveCatalog();model.addElement(d);devList.setSelectedValue(d,true);}));
+        actions.add(btn("Додати / замінити фото",()->{Device d=devList.getSelectedValue();if(d==null)return;File chosen=chooseFile(dialog,false,null,"photos");if(chosen==null)return;try{Path source=chosen.toPath();if(ImageIO.read(source.toFile())==null)throw new IOException("Використайте JPG або PNG.");String ext=source.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".png")?".png":".jpg";Path dest=Files.createTempFile(photoDir,"vtx_",ext);Files.copy(source,dest,StandardCopyOption.REPLACE_EXISTING);int pos=devices.indexOf(d);Device updated=new Device(d.maker(),d.model(),d.protocol(),dest.toString());devices.set(pos,updated);int selected=devList.getSelectedIndex();model.set(selected,updated);devList.setSelectedIndex(selected);saveCatalog();refresh.run();updateSelectedPhoto();}catch(Exception ex){JOptionPane.showMessageDialog(dialog,ex.getMessage(),"Помилка фото",JOptionPane.ERROR_MESSAGE);}}));
         actions.add(btn("Видалити модель",()->{Device d=devList.getSelectedValue();if(d==null)return;if(JOptionPane.showConfirmDialog(dialog,"Видалити «"+d+"»?","Підтвердження",JOptionPane.YES_NO_OPTION)!=JOptionPane.YES_OPTION)return;devices.remove(d);model.removeElement(d);saveCatalog();if(selectedVtx.equals(d.toString())){selectedVtx="";store();updateSelectedPhoto();}}));
-        actions.add(btn("Відкрити папку каталогу",()->{
-            try{Desktop.getDesktop().open(catalogFile.getParent().toFile());}
-            catch(Exception ex){JOptionPane.showMessageDialog(dialog,"Каталог: "+catalogFile.getParent()+"\n"+ex.getMessage());}
-        }));
+        actions.add(btn("Відкрити папку каталогу",()->{try{Desktop.getDesktop().open(catalogFile.getParent().toFile());}catch(Exception ex){JOptionPane.showMessageDialog(dialog,"Каталог: "+catalogFile.getParent()+"\n"+ex.getMessage());}}));
         actions.add(btn("Закрити",dialog::dispose));
-        dialog.setLayout(new BorderLayout(8,8));dialog.add(left,BorderLayout.WEST);dialog.add(detail,BorderLayout.CENTER);dialog.add(actions,BorderLayout.SOUTH);if(!model.isEmpty())devList.setSelectedIndex(0);setDarkTheme(true);image.setBackground(new Color(25,25,25));image.setForeground(Color.WHITE);dialog.setVisible(true);
+        dialog.setLayout(new BorderLayout(8,8));dialog.add(left,BorderLayout.WEST);dialog.add(detail,BorderLayout.CENTER);dialog.add(actions,BorderLayout.SOUTH);if(!model.isEmpty())devList.setSelectedIndex(0);setDarkTheme(true);image.setBackground(Color.WHITE);image.setForeground(new Color(70,70,70));dialog.setVisible(true);
     }
     static String html(String s){return s.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;");}
     static final String CATALOG="""
@@ -634,7 +627,7 @@ RX — протоколи
         if(selectedMask>=0&&(selectedMask&65)!=0)b.append("[?] На вибраному UART є MSP або Serial RX: не змінювати автоматично\n");
         compareSetting(b,"Діапазон",settings.get("vtx_band"),String.valueOf(c.dband));
         compareSetting(b,"Канал",settings.get("vtx_channel"),String.valueOf(c.dchan));
-        int requestedPower=c.powers[Math.max(0,Math.min(2,2))];
+        int requestedPower=c.powers[c.powers.length-1];
         compareSetting(b,"Потужність (індекс)",settings.get("vtx_power"),String.valueOf(requestedPower));
         int bands=-1,channels=-1,powerLevels=-1;
         for(String t:table){String[] parts=t.split("\\s+");try{
@@ -1184,14 +1177,15 @@ try {
             editor.getTextField().setCaretColor(fg);
         }
         if(c instanceof Container co)for(Component x:co.getComponents())applyColors(x,bg,fg,dark);
+        if(c instanceof JLabel label && Boolean.TRUE.equals(label.getClientProperty("vtx.whitePhoto"))){label.setBackground(Color.WHITE);label.setForeground(new Color(70,70,70));}
         c.repaint();
     }
 
     static final class Json{
         static String escape(String s){StringBuilder b=new StringBuilder();for(char c:s.toCharArray()){switch(c){case '\\'->b.append("\\\\");case '"'->b.append("\\\"");case '\n'->b.append("\\n");case '\r'->b.append("\\r");case '\t'->b.append("\\t");default->b.append(c);}}return b.toString();}
-        static String stringify(List<Config> list){StringBuilder b=new StringBuilder("{\n  \"formatVersion\": ").append(JSON_VERSION).append(",\n  \"configs\": [\n");for(int i=0;i<list.size();i++){Config c=list.get(i);b.append("    {\n");field(b,"name",c.name,true);field(b,"selectedVtx",c.selectedVtx,true);field(b,"template",c.template,true);field(b,"uart",c.uart,true);field(b,"protocol",c.protocol,true);field(b,"aux",c.aux,true);num(b,"dband",c.dband,true);num(b,"dchan",c.dchan,true);b.append("      \"powers\": [").append(c.powers[0]).append(", ").append(c.powers[1]).append(", ").append(c.powers[2]).append("],\n");bool(b,"incTable",c.incTable,true);bool(b,"includePortSetup",c.includePortSetup,true);b.append("      \"steps\": [\n");for(int j=0;j<c.steps.size();j++){BandStep s=c.steps.get(j);b.append("        [\"").append(escape(s.aux())).append("\", ").append(s.band()).append(", ").append(s.channel()).append(", ").append(s.start()).append(", ").append(s.end()).append("]").append(j+1<c.steps.size()?",":"").append('\n');}b.append("      ]\n    }").append(i+1<list.size()?",":"").append('\n');}return b.append("  ]\n}\n").toString();}
+        static String stringify(List<Config> list){StringBuilder b=new StringBuilder("{\n  \"formatVersion\": ").append(JSON_VERSION).append(",\n  \"configs\": [\n");for(int i=0;i<list.size();i++){Config c=list.get(i);b.append("    {\n");field(b,"name",c.name,true);field(b,"selectedVtx",c.selectedVtx,true);field(b,"template",c.template,true);field(b,"uart",c.uart,true);field(b,"protocol",c.protocol,true);field(b,"aux",c.aux,true);num(b,"dband",c.dband,true);num(b,"dchan",c.dchan,true);b.append("      \"powers\": [");for(int pi=0;pi<c.powers.length;pi++){if(pi>0)b.append(", ");b.append(c.powers[pi]);}b.append("],\n      \"powerMw\": [");for(int pi=0;pi<c.powerMw.length;pi++){if(pi>0)b.append(", ");b.append(c.powerMw[pi]);}b.append("],\n");bool(b,"incTable",c.incTable,true);bool(b,"includePortSetup",c.includePortSetup,true);b.append("      \"steps\": [\n");for(int j=0;j<c.steps.size();j++){BandStep s=c.steps.get(j);b.append("        [\"").append(escape(s.aux())).append("\", ").append(s.band()).append(", ").append(s.channel()).append(", ").append(s.start()).append(", ").append(s.end()).append("]").append(j+1<c.steps.size()?",":"").append('\n');}b.append("      ]\n    }").append(i+1<list.size()?",":"").append('\n');}return b.append("  ]\n}\n").toString();}
         static void field(StringBuilder b,String k,String v,boolean comma){b.append("      \"").append(k).append("\": \"").append(escape(v)).append("\"").append(comma?",":"").append('\n');}static void num(StringBuilder b,String k,int v,boolean comma){b.append("      \"").append(k).append("\": ").append(v).append(comma?",":"").append('\n');}static void bool(StringBuilder b,String k,boolean v,boolean comma){b.append("      \"").append(k).append("\": ").append(v).append(comma?",":"").append('\n');}
-        static List<Config> toConfigs(String raw){Object root=new Parser(raw).parse();if(!(root instanceof Map<?,?> m))throw new IllegalArgumentException("JSON root must be object");Object arr=m.get("configs");if(!(arr instanceof List<?> l))throw new IllegalArgumentException("JSON field 'configs' must be array");List<Config> out=new ArrayList<>();for(Object o:l){if(!(o instanceof Map<?,?> m2))throw new IllegalArgumentException("config must be object");Config c=new Config();c.name=str(m2,"name","Без назви");c.selectedVtx=str(m2,"selectedVtx","");c.template=str(m2,"template","");c.uart=str(m2,"uart","UART1");c.protocol=str(m2,"protocol","TBS SmartAudio 2.0");c.aux=str(m2,"aux","AUX3");c.dband=num(m2,"dband",5);c.dchan=num(m2,"dchan",1);Object ps=m2.get("powers");if(ps instanceof List<?> p){for(int i=0;i<3&&i<p.size();i++)c.powers[i]=toInt(p.get(i),c.powers[i]);}c.incTable=bool(m2,"incTable",true);c.includePortSetup=bool(m2,"includePortSetup",false);Object ss=m2.get("steps");if(ss instanceof List<?> sl){List<BandStep> steps=new ArrayList<>();for(Object so:sl){if(so instanceof List<?> x&&x.size()==5)steps.add(new BandStep(String.valueOf(x.get(0)),toInt(x.get(1),0),toInt(x.get(2),1),toInt(x.get(3),900),toInt(x.get(4),1000)));}if(steps.size()==6)c.steps=steps;}out.add(c);}return out;}
+        static List<Config> toConfigs(String raw){Object root=new Parser(raw).parse();if(!(root instanceof Map<?,?> m))throw new IllegalArgumentException("JSON root must be object");Object arr=m.get("configs");if(!(arr instanceof List<?> l))throw new IllegalArgumentException("JSON field 'configs' must be array");List<Config> out=new ArrayList<>();for(Object o:l){if(!(o instanceof Map<?,?> m2))throw new IllegalArgumentException("config must be object");Config c=new Config();c.name=str(m2,"name","Без назви");c.selectedVtx=str(m2,"selectedVtx","");c.template=str(m2,"template","");c.uart=str(m2,"uart","UART1");c.protocol=str(m2,"protocol","TBS SmartAudio 2.0");c.aux=str(m2,"aux","AUX3");c.dband=num(m2,"dband",5);c.dchan=num(m2,"dchan",1);Object ps=m2.get("powers");if(ps instanceof List<?> p && p.size()>=3){c.powers=new int[Math.min(6,p.size())];for(int i=0;i<c.powers.length;i++)c.powers[i]=toInt(p.get(i),i);}Object mw=m2.get("powerMw");c.powerMw=new int[c.powers.length];if(mw instanceof List<?> p){for(int i=0;i<c.powerMw.length&&i<p.size();i++)c.powerMw[i]=toInt(p.get(i),0);}c.incTable=bool(m2,"incTable",true);c.includePortSetup=bool(m2,"includePortSetup",false);Object ss=m2.get("steps");if(ss instanceof List<?> sl){List<BandStep> steps=new ArrayList<>();for(Object so:sl){if(so instanceof List<?> x&&x.size()==5)steps.add(new BandStep(String.valueOf(x.get(0)),toInt(x.get(1),0),toInt(x.get(2),1),toInt(x.get(3),900),toInt(x.get(4),1000)));}if(steps.size()==6)c.steps=steps;}out.add(c);}return out;}
         static String str(Map<?,?>m,String k,String d){Object v=m.get(k);return v==null?d:String.valueOf(v);}static int num(Map<?,?>m,String k,int d){return toInt(m.get(k),d);}static boolean bool(Map<?,?>m,String k,boolean d){Object v=m.get(k);return v instanceof Boolean x?x:d;}static int toInt(Object v,int d){return v instanceof Number n?n.intValue():d;}
         static final class Parser{final String s;int p=0;Parser(String s){this.s=s;}void ws(){while(p<s.length()&&Character.isWhitespace(s.charAt(p)))p++;}Object parse(){ws();Object v=value();ws();if(p!=s.length())err("Trailing data");return v;}Object value(){ws();if(p>=s.length())err("Unexpected end");char c=s.charAt(p);if(c=='{')return object();if(c=='[')return array();if(c=='"')return string();if(s.startsWith("true",p)){p+=4;return true;}if(s.startsWith("false",p)){p+=5;return false;}if(s.startsWith("null",p)){p+=4;return null;}if(c=='-'||Character.isDigit(c))return number();err("Unexpected token");return null;}
             Map<String,Object> object(){Map<String,Object> m=new LinkedHashMap<>();p++;ws();if(peek('}')){p++;return m;}while(true){ws();if(!peek('"'))err("Object key must be string");String k=string();ws();expect(':');m.put(k,value());ws();if(peek('}')){p++;return m;}expect(',');}}
