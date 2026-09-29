@@ -28,11 +28,14 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          jpackage --type msi --name VtxConfig --input package-input --main-jar VtxConfig.jar --dest dist-win --app-version 2.1.1 --win-shortcut --win-menu --win-dir-chooser --java-options '-Xmx512m'
+          jpackage --type msi --name VtxConfig --input package-input --main-jar VtxConfig.jar --dest dist-win --app-version 2.1.2 --win-shortcut --win-menu --win-dir-chooser --java-options '-Xmx512m'
           if ($LASTEXITCODE -ne 0) { throw 'MSI build failed' }
           if (!(Get-ChildItem dist-win/*.msi)) { throw 'MSI not created' }
       - uses: actions/upload-artifact@v4
         with:
-          name: VtxConfig-2.1.1-Windows-MSI
+          name: VtxConfig-2.1.2-Windows-MSI
+          path: dist-win/*.msi
+          if-no-files-found: error
+
           path: dist-win/*.msi
           if-no-files-found: error
