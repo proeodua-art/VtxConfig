@@ -90,7 +90,7 @@ public class VtxApp extends JFrame {
     final JTextArea out=new JTextArea(22,52); final JButton[] tabs=new JButton[3]; final JLabel status=new JLabel(" ");
 
     public VtxApp() {
-        super(APP_NAME+" 2.1.6 — офлайн-генератор"); setDefaultCloseOperation(EXIT_ON_CLOSE); setLayout(new BorderLayout(8,8));
+        super(APP_NAME+" 2.1.8 — офлайн-генератор"); setDefaultCloseOperation(EXIT_ON_CLOSE); setLayout(new BorderLayout(8,8));
         add(collectionPanel(),BorderLayout.WEST); add(centerPanel(),BorderLayout.CENTER); add(status,BorderLayout.SOUTH);
         initCatalog();
         load(); if(configs.isEmpty()) configs.add(new Config()); refreshList(); select(Math.min(idx,configs.size()-1));
@@ -108,9 +108,10 @@ public class VtxApp extends JFrame {
         JPanel right=new JPanel(new BorderLayout(5,5)); right.setBorder(new TitledBorder("Результат")); JPanel tabsP=new JPanel(new GridLayout(1,3,4,4));
         String[] ns={"CLI","VTX table CLI","VTX table JSON"}; for(int i=0;i<3;i++){final int k=i; tabs[i]=btn(ns[i],()->setView(k));tabsP.add(tabs[i]);} JPanel rightTop=new JPanel(new BorderLayout(4,4));
         rightTop.add(tabsP,BorderLayout.NORTH);
-        JPanel fcBar=new JPanel(new GridLayout(1,2,5,4));
+        JPanel fcBar=new JPanel(new GridLayout(2,2,5,4));
         fcBar.add(btn("ЗНАЙТИ FC (USB)",this::detectFc));
         fcBar.add(btn("BACKUP FC (USB)",this::backupFc));
+        fcBar.add(btn("ІМПОРТ ДАМПА",this::importFcDump));
         fcBar.add(btn("Відправити на FC",this::sendToFc));
         rightTop.add(fcBar,BorderLayout.SOUTH);
         right.add(rightTop,BorderLayout.NORTH);
@@ -346,6 +347,100 @@ RX — протоколи
                 });
             }catch(Exception e){SwingUtilities.invokeLater(()->error(e));}
         },"fc-backup").start();
+    }
+
+    // Read-only import. Never sends a command to the flight controller.
+    void importFcDump(){
+        File file=chooseFile(this,false,null,null);
+        if(file==null)return;
+        try{
+            if(Files.size(file.toPath())>5_000_000)throw new IOException("Файл завеликий (максимум 5 МБ).");
+            String dump=Files.readString(file.toPath(),StandardCharsets.UTF_8);
+            String report=analyzeFcDump(dump,collect());
+            JTextArea area=new JTextArea(report,26,76);
+            area.setEditable(false);area.setFont(new Font(Font.MONOSPACED,Font.PLAIN,13));
+            area.setCaretPosition(0);
+            // Keep this dialog readable under Windows high-contrast / native theme.
+            area.setBackground(Color.WHITE);area.setForeground(Color.BLACK);
+            JScrollPane scroll=new JScrollPane(area);
+            scroll.setPreferredSize(new Dimension(790,540));
+            Object[] options={"Закрити", "Зберегти звіт"};
+            int result=JOptionPane.showOptionDialog(this,scroll,"Аналіз дампа FC — лише читання",
+                JOptionPane.DEFAULT_OPTION,JOptionPane.INFORMATION_MESSAGE,null,options,options[0]);
+            if(result==1){
+                File target=chooseFile(this,true,"fc-comparison.txt",null);
+                if(target!=null){
+                    if(target.exists()&&JOptionPane.showConfirmDialog(this,"Замінити файл?\n"+target,
+                        "Підтвердження",JOptionPane.YES_NO_OPTION)!=JOptionPane.YES_OPTION)return;
+                    Files.writeString(target.toPath(),report,StandardCharsets.UTF_8);
+                    status.setText("Звіт збережено: "+target);
+                }
+            }
+        }catch(Exception ex){error(ex);}
+    }
+    static String analyzeFcDump(String dump,Config c){
+        if(!dump.matches("(?s).*#\\s*version.*")||!dump.contains("# serial"))
+            throw new IllegalArgumentException("Це не схоже на повний CLI dump Betaflight: немає версії або розділу serial.");
+        Map<String,String> settings=new LinkedHashMap<>();
+        Map<Integer,Integer> ports=new TreeMap<>();
+        List<String> table=new ArrayList<>(),vtxRules=new ArrayList<>();
+        String version="невідома",board="невідома";
+        for(String raw:dump.split("\\R")){
+            String line=raw.trim();
+            if(line.startsWith("# Betaflight /"))version=line.substring(2);
+            if(line.startsWith("board_name "))board=line.substring(11).trim();
+            if(line.startsWith("serial ")){
+                String[] t=line.split("\\s+");
+                if(t.length>=3)try{ports.put(Integer.parseInt(t[1]),Integer.parseInt(t[2]));}catch(NumberFormatException ignored){}
+            }
+            if(line.startsWith("set ")){
+                int eq=line.indexOf('=');
+                if(eq>4)settings.put(line.substring(4,eq).trim(),line.substring(eq+1).trim());
+            }
+            if(line.startsWith("vtxtable "))table.add(line);
+            if(line.matches("vtx\\s+\\d+\\s+.*"))vtxRules.add(line);
+        }
+        if(ports.isEmpty())throw new IllegalArgumentException("У дампі немає налаштувань serial.");
+        StringBuilder b=new StringBuilder();
+        b.append("VtxConfig — аналіз дампа (ЛИШЕ ЧИТАННЯ)\n");
+        b.append("========================================\n");
+        b.append("Прошивка: ").append(version).append("\nПлата: ").append(board).append("\n");
+        b.append("Поточний шаблон VtxConfig: ").append(c.template).append("\n");
+        b.append("Вибраний порт у VtxConfig: ").append(c.uart).append("\n\nПОРТИ З ДАМПА\n");
+        for(var entry:ports.entrySet()){
+            int id=entry.getKey(),mask=entry.getValue();
+            String port=id==20?"USB VCP":id>=0&&id<20?"UART"+(id+1):"serial "+id;
+            List<String> roles=new ArrayList<>();
+            if((mask&1)!=0)roles.add("MSP");
+            if((mask&64)!=0)roles.add("Serial RX");
+            if((mask&2048)!=0)roles.add("VTX SmartAudio");
+            if((mask&8192)!=0)roles.add("VTX IRC Tramp");
+            if(roles.isEmpty())roles.add(mask==0?"вільний":"інші функції: "+mask);
+            b.append("  ").append(port).append(" : ").append(String.join(", ",roles)).append("\n");
+        }
+        int selectedId=-1;
+        try{selectedId=Integer.parseInt(c.uart.replace("UART",""))-1;}catch(Exception ignored){}
+        int selectedMask=ports.getOrDefault(selectedId,-1);
+        boolean selectedVtx=(selectedMask&10240)!=0;
+        b.append("\nПОРІВНЯННЯ\n");
+        if(selectedMask<0)b.append("УВАГА: вибраний порт відсутній у дампі.\n");
+        else if(!selectedVtx)b.append("УВАГА: ").append(c.uart).append(" не має функції VTX у цьому дампі.\n");
+        else b.append(c.uart).append(" уже має функцію VTX у цьому дампі.\n");
+        for(var entry:ports.entrySet())if(entry.getKey()!=selectedId&&(entry.getValue()&10240)!=0)
+            b.append("УВАГА: VTX призначено також на UART").append(entry.getKey()+1).append(".\n");
+        if(selectedMask>=0&&(selectedMask&64)!=0)b.append("НЕБЕЗПЕКА: вибраний порт зайнятий приймачем Serial RX.\n");
+        if(selectedMask>=0&&(selectedMask&1)!=0)b.append("УВАГА: вибраний порт використовує MSP.\n");
+        b.append("\nНАЛАШТУВАННЯ VTX\n");
+        for(String key:List.of("vtx_band","vtx_channel","vtx_power","vtx_freq","vtx_halfduplex"))
+            b.append("  ").append(key).append(" = ").append(settings.getOrDefault(key,"немає у дампі")).append("\n");
+        b.append("  VTX-таблиця: ").append(table.size()).append(" рядків\n");
+        for(String line:table)b.append("  ").append(line).append("\n");
+        b.append("\nПРАВИЛА VTX / AUX: ").append(vtxRules.size()).append("\n");
+        for(String line:vtxRules)b.append("  ").append(line).append("\n");
+        b.append("\nВАЖЛИВО: дамп показує налаштування FC, але НЕ підтверджує\n");
+        b.append("модель VTX, його живлення або фізичне підключення TX/RX.\n");
+        b.append("ЖОДНИХ команд на FC не надіслано. Кнопка запису заблокована.\n");
+        return b.toString();
     }
 
     void sendToFc(){
