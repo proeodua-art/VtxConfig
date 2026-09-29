@@ -270,8 +270,48 @@ RX — протоколи
     static Path resolveDataFile(){String os=System.getProperty("os.name").toLowerCase();Path base;if(os.contains("win")){String a=System.getenv("APPDATA");base=a!=null?Path.of(a):Path.of(System.getProperty("user.home"));}else if(os.contains("mac"))base=Path.of(System.getProperty("user.home"),"Library","Application Support");else{String x=System.getenv("XDG_CONFIG_HOME");base=x!=null?Path.of(x):Path.of(System.getProperty("user.home"),".config");}Path d=base.resolve(APP_NAME);try{Files.createDirectories(d);}catch(IOException ignored){}return d.resolve("vtx_configs.json");}
     void load(){dataFile=resolveDataFile();if(!Files.exists(dataFile))return;try{configs.addAll(Json.toConfigs(Files.readString(dataFile,StandardCharsets.UTF_8)));status.setText("Завантажено конфігурацій: "+configs.size());}catch(Exception e){status.setText("Колекцію не прочитано: "+e.getMessage());}}
     void persist(){try{Files.writeString(dataFile,Json.stringify(configs),StandardCharsets.UTF_8,StandardOpenOption.CREATE,StandardOpenOption.TRUNCATE_EXISTING,StandardOpenOption.WRITE);}catch(IOException e){status.setText("Не збережено: "+e.getMessage());}}
-    void setDarkTheme(boolean dark){Color bg=dark?new Color(22,31,46):UIManager.getColor("Panel.background");Color fg=dark?new Color(235,235,235):UIManager.getColor("Label.foreground");for(Window w:Window.getWindows())applyColors(w,bg,fg,dark);}
-    void applyColors(Component c,Color bg,Color fg,boolean dark){if(c instanceof JPanel||c instanceof JScrollPane||c instanceof JViewport)c.setBackground(bg);if(c instanceof JLabel||c instanceof JCheckBox)c.setForeground(fg);if(c instanceof JTextField||c instanceof JTextArea||c instanceof JList||c instanceof JComboBox||c instanceof JSpinner){c.setBackground(dark?new Color(35,48,67):Color.WHITE);c.setForeground(fg);}if(c instanceof Container co)for(Component x:co.getComponents())applyColors(x,bg,fg,dark);c.repaint();}
+    void setDarkTheme(boolean dark){
+        Color bg=dark?new Color(22,31,46):UIManager.getColor("Panel.background");
+        Color fg=dark?new Color(235,235,235):UIManager.getColor("Label.foreground");
+        for(Window w:Window.getWindows())applyColors(w,bg,fg,dark);
+    }
+    void applyColors(Component c,Color bg,Color fg,boolean dark){
+        Color fieldBg=dark?new Color(35,48,67):Color.WHITE;
+        Color fieldFg=dark?new Color(245,248,255):Color.BLACK;
+        if(c instanceof JPanel||c instanceof JScrollPane||c instanceof JViewport)c.setBackground(bg);
+        if(c instanceof JLabel||c instanceof JCheckBox)c.setForeground(fg);
+        if(c instanceof JComboBox<?> combo){
+            combo.setOpaque(true);
+            combo.setBackground(fieldBg);
+            combo.setForeground(fieldFg);
+            // The Windows look-and-feel may ignore combo foreground for the
+            // selected item. An explicit renderer keeps it readable.
+            combo.setRenderer(new DefaultListCellRenderer(){
+                @Override public Component getListCellRendererComponent(JList<?> list,Object value,int index,boolean selected,boolean focus){
+                    JLabel label=(JLabel)super.getListCellRendererComponent(list,value,index,selected,focus);
+                    label.setOpaque(true);
+                    label.setBackground(selected?new Color(54,107,166):fieldBg);
+                    label.setForeground(selected?Color.WHITE:fieldFg);
+                    return label;
+                }
+            });
+            if(combo.isEditable() && combo.getEditor().getEditorComponent() instanceof JTextField editor){
+                editor.setBackground(fieldBg);editor.setForeground(fieldFg);editor.setCaretColor(fieldFg);
+            }
+        }else if(c instanceof JSpinner spinner){
+            spinner.setBackground(fieldBg);spinner.setForeground(fieldFg);
+            if(spinner.getEditor() instanceof JSpinner.DefaultEditor editor){
+                JTextField text=editor.getTextField();
+                text.setBackground(fieldBg);text.setForeground(fieldFg);text.setCaretColor(fieldFg);
+                text.setDisabledTextColor(dark?new Color(190,200,215):Color.DARK_GRAY);
+            }
+        }else if(c instanceof JTextField||c instanceof JTextArea||c instanceof JList){
+            c.setBackground(fieldBg);c.setForeground(fieldFg);
+            if(c instanceof JList<?> list){list.setSelectionBackground(new Color(54,107,166));list.setSelectionForeground(Color.WHITE);}
+        }
+        if(c instanceof Container co)for(Component x:co.getComponents())applyColors(x,bg,fg,dark);
+        c.repaint();
+    }
 
     static final class Json{
         static String escape(String s){StringBuilder b=new StringBuilder();for(char c:s.toCharArray()){switch(c){case '\\'->b.append("\\\\");case '"'->b.append("\\\"");case '\n'->b.append("\\n");case '\r'->b.append("\\r");case '\t'->b.append("\\t");default->b.append(c);}}return b.toString();}
