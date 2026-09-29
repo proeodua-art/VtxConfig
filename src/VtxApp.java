@@ -95,11 +95,18 @@ public class VtxApp extends JFrame {
     final JTextArea out=new JTextArea(22,52); final JButton[] tabs=new JButton[3]; final JLabel status=new JLabel(" ");
 
     public VtxApp() {
-        super(APP_NAME+" 2.3.1 — офлайн-генератор"); setDefaultCloseOperation(EXIT_ON_CLOSE); setLayout(new BorderLayout(8,8));
+        super(APP_NAME+" 2.3.2 — офлайн-генератор"); setDefaultCloseOperation(EXIT_ON_CLOSE); setLayout(new BorderLayout(8,8));
         add(collectionPanel(),BorderLayout.WEST); add(centerPanel(),BorderLayout.CENTER); add(status,BorderLayout.SOUTH);
+        installWindowIcon();
         initCatalog();
         load(); if(configs.isEmpty()) configs.add(new Config()); refreshList(); select(Math.min(idx,configs.size()-1));
         setSize(1450,850); setLocationRelativeTo(null); setMinimumSize(new Dimension(1120,740)); updateSelectedPhoto();
+    }
+
+    void installWindowIcon(){
+        try(java.io.InputStream in=VtxApp.class.getResourceAsStream("/vtx-icon.png")){
+            if(in!=null){BufferedImage img=ImageIO.read(in);if(img!=null)setIconImage(img);}
+        }catch(IOException ignored){}
     }
 
     JPanel collectionPanel(){
@@ -230,10 +237,10 @@ public class VtxApp extends JFrame {
     void openDataDir(){try{Desktop.getDesktop().open(dataFile.getParent().toFile());}catch(Exception e){JOptionPane.showMessageDialog(this,"Тека даних:\n"+dataFile.getParent());}}void error(Exception e){JOptionPane.showMessageDialog(this,e.getMessage(),"Помилка",JOptionPane.ERROR_MESSAGE);}
 
     JPanel selectedPanel(){
-        JPanel card=new JPanel(new BorderLayout(10,4));card.setBorder(BorderFactory.createCompoundBorder(BorderFactory.createLineBorder(new Color(49,70,96),1,true),BorderFactory.createEmptyBorder(8,12,8,12)));
-        selectedPhoto.setPreferredSize(new Dimension(145,105)); selectedPhoto.setOpaque(true);selectedPhoto.setBackground(new Color(19,29,44));
-        selectedPhoto.setForeground(new Color(160,180,200));card.add(selectedPhoto,BorderLayout.WEST);
-        JPanel info=new JPanel(new BorderLayout(4,4));JLabel caption=new JLabel("ОБРАНИЙ ПЕРЕДАВАЧ");caption.setForeground(new Color(94,190,255));info.add(caption,BorderLayout.NORTH);
+        JPanel card=new JPanel(new BorderLayout(10,4));card.setBorder(BorderFactory.createCompoundBorder(BorderFactory.createLineBorder(new Color(75,75,75),1,true),BorderFactory.createEmptyBorder(8,12,8,12)));
+        selectedPhoto.setPreferredSize(new Dimension(145,105)); selectedPhoto.setOpaque(true);selectedPhoto.setBackground(new Color(25,25,25));
+        selectedPhoto.setForeground(new Color(185,185,185));card.add(selectedPhoto,BorderLayout.WEST);
+        JPanel info=new JPanel(new BorderLayout(4,4));JLabel caption=new JLabel("ОБРАНИЙ ПЕРЕДАВАЧ");caption.setForeground(new Color(220,220,220));info.add(caption,BorderLayout.NORTH);
         selectedTitle.setFont(selectedTitle.getFont().deriveFont(Font.BOLD,16f));info.add(selectedTitle,BorderLayout.CENTER);
         info.add(btn("Відкрити каталог / змінити фото",this::showCatalog),BorderLayout.SOUTH);card.add(info,BorderLayout.CENTER);
         return card;
@@ -416,7 +423,7 @@ public class VtxApp extends JFrame {
         searchPanel.add(resultCount,BorderLayout.SOUTH);
         left.add(searchPanel,BorderLayout.NORTH);
         left.add(new JScrollPane(devList),BorderLayout.CENTER);left.setPreferredSize(new Dimension(300,400));
-        JLabel image=new JLabel("Фото ще не додано",SwingConstants.CENTER);image.setPreferredSize(new Dimension(440,350));image.setOpaque(true);image.setBackground(Color.WHITE);image.setForeground(Color.BLACK);
+        JLabel image=new JLabel("Фото ще не додано",SwingConstants.CENTER);image.setPreferredSize(new Dimension(440,350));image.setOpaque(true);image.setBackground(new Color(25,25,25));image.setForeground(Color.WHITE);
         JLabel info=new JLabel("Оберіть передавач");JPanel detail=new JPanel(new BorderLayout(5,5));detail.add(image,BorderLayout.CENTER);detail.add(info,BorderLayout.SOUTH);
         Runnable refresh=()->{Device d=devList.getSelectedValue();if(d==null){image.setIcon(null);image.setText("Оберіть VTX");info.setText(" ");return;}ImageIcon icon=thumbnail(d.image(),440,350);image.setIcon(icon);image.setText(icon==null?"Фото ще не додано":"");info.setText("<html><b>"+html(d.toString())+"</b><br>Протокол: "+html(d.protocol())+"</html>");};
         devList.addListSelectionListener(e->{if(!e.getValueIsAdjusting())refresh.run();});
@@ -450,7 +457,7 @@ public class VtxApp extends JFrame {
             catch(Exception ex){JOptionPane.showMessageDialog(dialog,"Каталог: "+catalogFile.getParent()+"\n"+ex.getMessage());}
         }));
         actions.add(btn("Закрити",dialog::dispose));
-        dialog.setLayout(new BorderLayout(8,8));dialog.add(left,BorderLayout.WEST);dialog.add(detail,BorderLayout.CENTER);dialog.add(actions,BorderLayout.SOUTH);if(!model.isEmpty())devList.setSelectedIndex(0);setDarkTheme(true);image.setBackground(Color.WHITE);image.setForeground(Color.BLACK);dialog.setVisible(true);
+        dialog.setLayout(new BorderLayout(8,8));dialog.add(left,BorderLayout.WEST);dialog.add(detail,BorderLayout.CENTER);dialog.add(actions,BorderLayout.SOUTH);if(!model.isEmpty())devList.setSelectedIndex(0);setDarkTheme(true);image.setBackground(new Color(25,25,25));image.setForeground(Color.WHITE);dialog.setVisible(true);
     }
     static String html(String s){return s.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;");}
     static final String CATALOG="""
@@ -1123,8 +1130,8 @@ try {
     void persist(){try{Files.writeString(dataFile,Json.stringify(configs),StandardCharsets.UTF_8,StandardOpenOption.CREATE,StandardOpenOption.TRUNCATE_EXISTING,StandardOpenOption.WRITE);}catch(IOException e){status.setText("Не збережено: "+e.getMessage());}}
     // Set Swing defaults BEFORE constructing controls, including popup menus and dialogs.
     static void installReadableDarkDefaults(){
-        Color bg=new Color(22,31,46), field=new Color(35,48,67);
-        Color fg=new Color(242,246,252), selected=new Color(53,113,177);
+        Color bg=new Color(12,12,12), field=new Color(35,35,35);
+        Color fg=new Color(242,246,252), selected=new Color(83,83,83);
         String[] foreground={"Label.foreground","CheckBox.foreground","RadioButton.foreground",
             "ComboBox.foreground","ComboBox.selectionForeground","List.foreground","List.selectionForeground",
             "TextField.foreground","TextArea.foreground","Spinner.foreground","FormattedTextField.foreground",
@@ -1142,12 +1149,12 @@ try {
         UIManager.put("TextArea.caretForeground",new javax.swing.plaf.ColorUIResource(fg));
     }
     void setDarkTheme(boolean dark){
-        Color bg=dark?new Color(22,31,46):UIManager.getColor("Panel.background");
+        Color bg=dark?new Color(12,12,12):UIManager.getColor("Panel.background");
         Color fg=dark?new Color(242,246,252):UIManager.getColor("Label.foreground");
         for(Window w:Window.getWindows())applyColors(w,bg,fg,dark);
     }
     void applyColors(Component c,Color bg,Color fg,boolean dark){
-        Color field=dark?new Color(35,48,67):Color.WHITE;
+        Color field=dark?new Color(35,35,35):Color.WHITE;
         if(c instanceof JPanel||c instanceof JScrollPane||c instanceof JViewport)c.setBackground(bg);
         if(c instanceof JLabel||c instanceof JCheckBox)c.setForeground(fg);
         if(c instanceof JCheckBox cb){cb.setOpaque(false);cb.setBackground(bg);}
@@ -1165,7 +1172,7 @@ try {
                 @Override public Component getListCellRendererComponent(JList<?> list,Object value,int index,boolean selected,boolean focus){
                     super.getListCellRendererComponent(list,value,index,selected,focus);
                     setOpaque(true);
-                    setBackground(selected?new Color(53,113,177):field);
+                    setBackground(selected?new Color(83,83,83):field);
                     setForeground(Color.WHITE);
                     return this;
                 }
