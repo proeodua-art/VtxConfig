@@ -91,7 +91,7 @@ public class VtxApp extends JFrame {
     final JTextArea out=new JTextArea(22,52); final JButton[] tabs=new JButton[3]; final JLabel status=new JLabel(" ");
 
     public VtxApp() {
-        super(APP_NAME+" 2.2.0 — офлайн-генератор"); setDefaultCloseOperation(EXIT_ON_CLOSE); setLayout(new BorderLayout(8,8));
+        super(APP_NAME+" 2.2.1 — офлайн-генератор"); setDefaultCloseOperation(EXIT_ON_CLOSE); setLayout(new BorderLayout(8,8));
         add(collectionPanel(),BorderLayout.WEST); add(centerPanel(),BorderLayout.CENTER); add(status,BorderLayout.SOUTH);
         initCatalog();
         load(); if(configs.isEmpty()) configs.add(new Config()); refreshList(); select(Math.min(idx,configs.size()-1));
@@ -109,11 +109,12 @@ public class VtxApp extends JFrame {
         JPanel right=new JPanel(new BorderLayout(5,5)); right.setBorder(new TitledBorder("Результат")); JPanel tabsP=new JPanel(new GridLayout(1,3,4,4));
         String[] ns={"CLI","VTX table CLI","VTX table JSON"}; for(int i=0;i<3;i++){final int k=i; tabs[i]=btn(ns[i],()->setView(k));tabsP.add(tabs[i]);} JPanel rightTop=new JPanel(new BorderLayout(4,4));
         rightTop.add(tabsP,BorderLayout.NORTH);
-        JPanel fcBar=new JPanel(new GridLayout(3,2,5,4));
+        JPanel fcBar=new JPanel(new GridLayout(4,2,5,4));
         fcBar.add(btn("ЗНАЙТИ FC (USB)",this::detectFc));
         fcBar.add(btn("BACKUP FC (USB)",this::backupFc));
         fcBar.add(btn("ІМПОРТ ДАМПА",this::importFcDump));
         fcBar.add(btn("ПЕРЕГЛЯД ЗМІН",this::previewFcChanges));
+        fcBar.add(btn("ЗЧИТАТИ FC І ПОРІВНЯТИ",this::compareLiveFc));
         fcBar.add(btn("Відправити на FC",this::sendToFc));
         rightTop.add(fcBar,BorderLayout.SOUTH);
         right.add(rightTop,BorderLayout.NORTH);
@@ -480,6 +481,96 @@ RX — протоколи
         if(actual==null)b.append("[?] ").append(label).append(": у дампі немає значення; у програмі ").append(desired).append('\n');
         else b.append(actual.equals(desired)?"[OK] ":"[!] ").append(label)
             .append(": дамп ").append(actual).append(" / програма ").append(desired).append('\n');
+    }
+
+    // Read-only live comparison. Save the freshly read dump before showing any proposed changes.
+    void compareLiveFc(){
+        if(detectedPort.isBlank()){
+            JOptionPane.showMessageDialog(this,"Спочатку натисніть ЗНАЙТИ FC (USB).", "Потрібен FC",JOptionPane.INFORMATION_MESSAGE);return;
+        }
+        final String port=detectedPort;
+        final String oldDump=importedDump, oldName=importedDumpName;
+        final Config desired=collect();
+        String stamp=java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"));
+        File chosen=chooseFile(this,true,"FC-LIVE-"+port+"-"+stamp+".txt",null);
+        if(chosen==null)return;
+        Path target=chosen.toPath().toAbsolutePath();
+        if(Files.exists(target)&&JOptionPane.showConfirmDialog(this,"Замінити файл?\n"+target,
+                "Підтвердження",JOptionPane.YES_NO_OPTION,JOptionPane.WARNING_MESSAGE)!=JOptionPane.YES_OPTION)return;
+        status.setText("Зчитування поточного FC з "+port+". Не відключайте USB.");
+        new Thread(()->{
+            try{
+                String live=WindowsSerial.backup(port);
+                if(!live.matches("(?s).*#\\s*version.*") || !live.contains("# serial") || !live.matches("(?s).*\\bserial\\s+\\d+.*"))
+                    throw new IOException("Неповний dump: немає версії або налаштувань UART. Файл не збережено.");
+                Path parent=target.getParent();
+                if(parent!=null)Files.createDirectories(parent);
+                Path tmp=Files.createTempFile(parent,"vtx-live-",".tmp");
+                try{Files.writeString(tmp,live,StandardCharsets.UTF_8);Files.move(tmp,target,StandardCopyOption.REPLACE_EXISTING);}
+                finally{Files.deleteIfExists(tmp);}
+                String report=buildLiveComparison(live,oldDump,oldName,desired,port,target.toString());
+                SwingUtilities.invokeLater(()->{
+                    status.setText("Актуальний dump збережено: "+target);
+                    JTextArea area=new JTextArea(report,27,80);
+                    area.setEditable(false);area.setFont(new Font(Font.MONOSPACED,Font.PLAIN,13));
+                    area.setBackground(Color.WHITE);area.setForeground(Color.BLACK);area.setCaretPosition(0);
+                    JScrollPane pane=new JScrollPane(area);pane.setPreferredSize(new Dimension(860,550));
+                    Object[] opts={"Закрити","Зберегти звіт"};
+                    int choice=JOptionPane.showOptionDialog(this,pane,"Актуальний FC — лише читання",
+                        JOptionPane.DEFAULT_OPTION,JOptionPane.INFORMATION_MESSAGE,null,opts,opts[0]);
+                    if(choice==1){
+                        File dest=chooseFile(this,true,"FC-live-comparison.txt",null);
+                        if(dest!=null){try{
+                            if(dest.exists()&&JOptionPane.showConfirmDialog(this,"Замінити звіт?", "Підтвердження",JOptionPane.YES_NO_OPTION)!=JOptionPane.YES_OPTION)return;
+                            Files.writeString(dest.toPath(),report,StandardCharsets.UTF_8);
+                        }catch(Exception ex){error(ex);}}
+                    }
+                });
+            }catch(Exception ex){SwingUtilities.invokeLater(()->error(ex));}
+        },"fc-live-compare").start();
+    }
+    static String dumpValue(String dump,String key){
+        java.util.regex.Matcher m=java.util.regex.Pattern.compile("(?m)^"+java.util.regex.Pattern.quote(key)+"\\s+(.+?)\\s*$").matcher(dump);
+        return m.find()?m.group(1).trim():"невідомо";
+    }
+    static Map<Integer,String> serialLines(String dump){
+        Map<Integer,String> result=new TreeMap<>();
+        for(String raw:dump.split("\\R")){
+            String line=raw.trim();
+            if(line.startsWith("serial ")){
+                String[] parts=line.split("\\s+");
+                if(parts.length>=7)try{result.put(Integer.parseInt(parts[1]),line);}catch(NumberFormatException ignored){}
+            }
+        }
+        return result;
+    }
+    static String buildLiveComparison(String live,String old,String oldName,Config config,String port,String path){
+        StringBuilder b=new StringBuilder("VtxConfig 2.2.1 — АКТУАЛЬНИЙ FC (ЛИШЕ ЧИТАННЯ)\n\n");
+        b.append("USB: ").append(port).append("\nСвіжий backup: ").append(path).append("\n");
+        b.append("Плата: ").append(dumpValue(live,"board_name")).append("\n");
+        b.append("Версія: ").append(live.lines().filter(line->line.startsWith("# Betaflight ")).findFirst().orElse("невідомо")).append("\n");
+        b.append("Обрано у програмі: ").append(config.uart).append(" / ").append(config.protocol).append("\n\n");
+        Map<Integer,String> now=serialLines(live);
+        b.append("ПОТОЧНІ UART (зі свіжого dump):\n");
+        for(var e:now.entrySet())b.append("serial ").append(e.getKey()).append(" [UART").append(e.getKey()+1).append("]: ").append(e.getValue()).append("\n");
+        if(old!=null){
+            b.append("\nПОРІВНЯННЯ З ІМПОРТОВАНИМ ДАМПОМ: ").append(oldName).append("\n");
+            String oldBoard=dumpValue(old,"board_name"), liveBoard=dumpValue(live,"board_name");
+            if(!oldBoard.equals("невідомо")&&!liveBoard.equals("невідомо")&&!oldBoard.equalsIgnoreCase(liveBoard))
+                b.append("[СТОП] РІЗНІ ПЛАТИ! Імпорт: ").append(oldBoard).append(" / USB: ").append(liveBoard).append("\n");
+            Map<Integer,String> before=serialLines(old);
+            Set<Integer> ids=new TreeSet<>(now.keySet());ids.addAll(before.keySet());
+            for(int id:ids){
+                String a=before.get(id), z=now.get(id);
+                if(Objects.equals(a,z))b.append("[OK] UART").append(id+1).append(": без змін\n");
+                else b.append("[!] UART").append(id+1).append("\n    Імпорт: ").append(a==null?"відсутній":a).append("\n    Зараз:  ").append(z==null?"відсутній":z).append("\n");
+            }
+        }else b.append("\nІмпортований dump відсутній: порівняння з файлом пропущено.\n");
+        b.append("\nПЕРЕГЛЯД ПРОПОНОВАНИХ ЗМІН\n");
+        try{b.append(buildChangePreview(live,config,"АКТУАЛЬНИЙ FC"));}
+        catch(Exception e){b.append("Неможливо побудувати попередній перегляд: ").append(e.getMessage());}
+        b.append("\n\nНІЧОГО НЕ ВІДПРАВЛЕНО. ЗАПИС ЗАБЛОКОВАНО.\n");
+        return b.toString();
     }
 
     // A preview is intentionally read-only: never opens COM ports or sends CLI commands.
