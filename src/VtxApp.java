@@ -3,6 +3,8 @@ import javax.swing.border.TitledBorder;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
 import java.awt.*;
+import java.awt.image.BufferedImage;
+import javax.imageio.ImageIO;
 import java.awt.datatransfer.StringSelection;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
@@ -42,6 +44,7 @@ public class VtxApp extends JFrame {
         String aux = "AUX3";
         int dband = 5, dchan = 1;
         int[] powers = {0, 1, 2};
+        String selectedVtx = "";
         boolean incTable = true;
         boolean includePortSetup = false;
         List<BandStep> steps = defaultSteps();
@@ -55,7 +58,7 @@ public class VtxApp extends JFrame {
         }
         Config copy() {
             Config c = new Config();
-            c.name=name; c.template=template; c.uart=uart; c.protocol=protocol; c.aux=aux;
+            c.name=name; c.selectedVtx=selectedVtx; c.template=template; c.uart=uart; c.protocol=protocol; c.aux=aux;
             c.dband=dband; c.dchan=dchan; c.powers=powers.clone(); c.incTable=incTable;
             c.includePortSetup=includePortSetup; c.steps=new ArrayList<>(steps); return c;
         }
@@ -75,13 +78,22 @@ public class VtxApp extends JFrame {
     final DefaultListModel<String> listModel=new DefaultListModel<>(); final JList<String> list=new JList<>(listModel);
     final JComboBox<String>[] stAux=new JComboBox[6]; final JComboBox<String>[] stBand=new JComboBox[6]; final JComboBox<String>[] stChan=new JComboBox[6];
     final JSpinner[] stStart=new JSpinner[6], stEnd=new JSpinner[6];
+    final JLabel selectedPhoto=new JLabel("Додайте фото у каталозі",SwingConstants.CENTER);
+    final JLabel selectedTitle=new JLabel("VTX не вибрано");
+    final List<Device> devices=new ArrayList<>();
+    static Path catalogFile, photoDir;
+    record Device(String maker,String model,String protocol,String image){
+        public String toString(){return maker+" · "+model;}
+    }
+    String selectedVtx="";
     final JTextArea out=new JTextArea(22,52); final JButton[] tabs=new JButton[3]; final JLabel status=new JLabel(" ");
 
     public VtxApp() {
         super(APP_NAME+" — офлайн-генератор"); setDefaultCloseOperation(EXIT_ON_CLOSE); setLayout(new BorderLayout(8,8));
         add(collectionPanel(),BorderLayout.WEST); add(centerPanel(),BorderLayout.CENTER); add(status,BorderLayout.SOUTH);
+        initCatalog();
         load(); if(configs.isEmpty()) configs.add(new Config()); refreshList(); select(Math.min(idx,configs.size()-1));
-        setSize(1250,760); setLocationRelativeTo(null); setMinimumSize(new Dimension(1050,680));
+        setSize(1450,850); setLocationRelativeTo(null); setMinimumSize(new Dimension(1120,740)); updateSelectedPhoto();
     }
 
     JPanel collectionPanel(){
@@ -91,11 +103,11 @@ public class VtxApp extends JFrame {
         JPanel b=new JPanel(new GridLayout(3,2,4,4)); b.add(btn("Нова",this::newCfg)); b.add(btn("Дубль",this::dupCfg)); b.add(btn("Видалити",this::delCfg)); b.add(btn("Експорт",this::exportAll)); b.add(btn("Імпорт",this::importAll)); b.add(btn("Тека даних",this::openDataDir)); left.add(b,BorderLayout.SOUTH); return left;
     }
     JPanel centerPanel(){
-        JPanel mid=new JPanel(new BorderLayout(5,5)); mid.setBorder(new TitledBorder("Параметри")); mid.add(form(),BorderLayout.NORTH); mid.add(stepsTable(),BorderLayout.CENTER);
+        JPanel mid=new JPanel(new BorderLayout(5,5)); mid.setBorder(new TitledBorder("Параметри")); JPanel top=new JPanel(new BorderLayout(6,6));top.add(selectedPanel(),BorderLayout.NORTH);top.add(form(),BorderLayout.CENTER);mid.add(top,BorderLayout.NORTH); mid.add(stepsTable(),BorderLayout.CENTER);
         JPanel right=new JPanel(new BorderLayout(5,5)); right.setBorder(new TitledBorder("Результат")); JPanel tabsP=new JPanel(new GridLayout(1,3,4,4));
         String[] ns={"CLI","VTX table CLI","VTX table JSON"}; for(int i=0;i<3;i++){final int k=i; tabs[i]=btn(ns[i],()->setView(k));tabsP.add(tabs[i]);} right.add(tabsP,BorderLayout.NORTH);
         out.setFont(new Font(Font.MONOSPACED,Font.PLAIN,12)); out.setEditable(false); right.add(new JScrollPane(out),BorderLayout.CENTER);
-        JPanel rb=new JPanel(new FlowLayout(FlowLayout.LEFT,4,4)); rb.add(btn("Копіювати",this::copyOut)); rb.add(btn("Зберегти файл",this::saveCurrent)); rb.add(btn("Зберегти всі три",this::saveAllThree)); rb.add(btn("Каталог VTX/RX",this::showCatalog)); rb.add(btn("Send to FC",this::sendToFc)); rb.add(btn("Темна тема",()->setDarkTheme(true))); rb.add(btn("Світла тема",()->setDarkTheme(false))); right.add(rb,BorderLayout.SOUTH);
+        JPanel rb=new JPanel(new FlowLayout(FlowLayout.LEFT,4,4)); rb.add(btn("Копіювати",this::copyOut)); rb.add(btn("Зберегти файл",this::saveCurrent)); rb.add(btn("Зберегти всі три",this::saveAllThree)); rb.add(btn("Каталог з фото",this::showCatalog)); rb.add(btn("Send to FC",this::sendToFc)); rb.add(btn("Темна тема",()->setDarkTheme(true))); rb.add(btn("Світла тема",()->setDarkTheme(false))); right.add(rb,BorderLayout.SOUTH);
         JPanel c=new JPanel(new GridLayout(1,2,8,8)); c.add(mid); c.add(right); return c;
     }
     JPanel form(){
@@ -117,10 +129,10 @@ public class VtxApp extends JFrame {
     static JButton btn(String t,Runnable r){JButton b=new JButton(t);b.addActionListener(e->r.run());return b;}
     static class SimpleDoc implements DocumentListener{final Runnable r;SimpleDoc(Runnable r){this.r=r;}public void insertUpdate(DocumentEvent e){r.run();}public void removeUpdate(DocumentEvent e){r.run();}public void changedUpdate(DocumentEvent e){r.run();}}
 
-    Config collect(){Config c=new Config();c.name=fName.getText().trim().isEmpty()?"Без назви":fName.getText().trim();c.template=fTemplate.getText().trim();c.uart=(String)fUart.getSelectedItem();c.protocol=(String)fProtocol.getSelectedItem();c.aux=(String)fAux.getSelectedItem();c.dband=bandCode((String)fBand.getSelectedItem(),5);c.dchan=Integer.parseInt((String)fChan.getSelectedItem());c.powers=new int[]{(int)sP1.getValue(),(int)sP2.getValue(),(int)sP3.getValue()};c.incTable=fTable.isSelected();c.includePortSetup=fPort.isSelected();c.steps=new ArrayList<>();for(int r=0;r<6;r++)c.steps.add(new BandStep((String)stAux[r].getSelectedItem(),bandCode((String)stBand[r].getSelectedItem(),0),Integer.parseInt((String)stChan[r].getSelectedItem()),(int)stStart[r].getValue(),(int)stEnd[r].getValue()));return c;}
+    Config collect(){Config c=new Config();c.selectedVtx=selectedVtx;c.name=fName.getText().trim().isEmpty()?"Без назви":fName.getText().trim();c.template=fTemplate.getText().trim();c.uart=(String)fUart.getSelectedItem();c.protocol=(String)fProtocol.getSelectedItem();c.aux=(String)fAux.getSelectedItem();c.dband=bandCode((String)fBand.getSelectedItem(),5);c.dchan=Integer.parseInt((String)fChan.getSelectedItem());c.powers=new int[]{(int)sP1.getValue(),(int)sP2.getValue(),(int)sP3.getValue()};c.incTable=fTable.isSelected();c.includePortSetup=fPort.isSelected();c.steps=new ArrayList<>();for(int r=0;r<6;r++)c.steps.add(new BandStep((String)stAux[r].getSelectedItem(),bandCode((String)stBand[r].getSelectedItem(),0),Integer.parseInt((String)stChan[r].getSelectedItem()),(int)stStart[r].getValue(),(int)stEnd[r].getValue()));return c;}
     static int bandCode(String s,int d){try{return Integer.parseInt(s.split(" ")[0]);}catch(Exception e){return d;}}
     static int auxIndex(String a){try{return Integer.parseInt(a.replace("AUX",""))-1;}catch(Exception e){return 0;}}
-    void select(int i){if(i<0||i>=configs.size())return;idx=i;loading=true;Config c=configs.get(i);fName.setText(c.name);fTemplate.setText(c.template);fUart.setSelectedItem(c.uart);fProtocol.setSelectedItem(c.protocol);fAux.setSelectedItem(c.aux);fBand.setSelectedItem(BAND_LABEL[Math.max(0,Math.min(5,c.dband))]);fChan.setSelectedItem(String.valueOf(c.dchan));sP1.setValue(c.powers[0]);sP2.setValue(c.powers[1]);sP3.setValue(c.powers[2]);fTable.setSelected(c.incTable);fPort.setSelected(c.includePortSetup);for(int r=0;r<6;r++){BandStep s=c.steps.get(r);stAux[r].setSelectedItem(s.aux());stBand[r].setSelectedItem(BAND_LABEL[Math.max(0,Math.min(5,s.band()))]);stChan[r].setSelectedItem(String.valueOf(s.channel()));stStart[r].setValue(s.start());stEnd[r].setValue(s.end());}loading=false;list.setSelectedIndex(i);render();}
+    void select(int i){if(i<0||i>=configs.size())return;idx=i;loading=true;Config c=configs.get(i);selectedVtx=c.selectedVtx;fName.setText(c.name);fTemplate.setText(c.template);fUart.setSelectedItem(c.uart);fProtocol.setSelectedItem(c.protocol);fAux.setSelectedItem(c.aux);fBand.setSelectedItem(BAND_LABEL[Math.max(0,Math.min(5,c.dband))]);fChan.setSelectedItem(String.valueOf(c.dchan));sP1.setValue(c.powers[0]);sP2.setValue(c.powers[1]);sP3.setValue(c.powers[2]);fTable.setSelected(c.incTable);fPort.setSelected(c.includePortSetup);for(int r=0;r<6;r++){BandStep s=c.steps.get(r);stAux[r].setSelectedItem(s.aux());stBand[r].setSelectedItem(BAND_LABEL[Math.max(0,Math.min(5,s.band()))]);stChan[r].setSelectedItem(String.valueOf(s.channel()));stStart[r].setValue(s.start());stEnd[r].setValue(s.end());}loading=false;list.setSelectedIndex(i);render();updateSelectedPhoto();}
 
     String buildCli(Config c){StringBuilder b=new StringBuilder();b.append("# VTX config: ").append(c.name).append('\n');b.append("# template: ").append(c.template.isEmpty()?"—":c.template).append(" | port: ").append(c.uart).append(" | protocol: ").append(c.protocol).append("\n\n");
         if(c.includePortSetup){
@@ -147,7 +159,68 @@ public class VtxApp extends JFrame {
     void importAll(){JFileChooser fc=new JFileChooser();if(fc.showOpenDialog(this)!=JFileChooser.APPROVE_OPTION)return;try{String raw=Files.readString(fc.getSelectedFile().toPath(),StandardCharsets.UTF_8);List<Config> incoming=Json.toConfigs(raw);Set<String> known=new HashSet<>();for(Config c:configs)known.add(c.name);int added=0;for(Config c:incoming)if(known.add(c.name)){configs.add(c);added++;}persist();refreshList();select(configs.size()-1);status.setText("Імпортовано: "+added);}catch(Exception e){error(e);}}
     void openDataDir(){try{Desktop.getDesktop().open(dataFile.getParent().toFile());}catch(Exception e){JOptionPane.showMessageDialog(this,"Тека даних:\n"+dataFile.getParent());}}void error(Exception e){JOptionPane.showMessageDialog(this,e.getMessage(),"Помилка",JOptionPane.ERROR_MESSAGE);}
 
-    void showCatalog(){JTextArea a=new JTextArea(18,70);a.setEditable(false);a.setText(CATALOG);a.setCaretPosition(0);JOptionPane.showMessageDialog(this,new JScrollPane(a),"Каталог VTX / RX",JOptionPane.INFORMATION_MESSAGE);}
+    JPanel selectedPanel(){
+        JPanel card=new JPanel(new BorderLayout(10,4));card.setBorder(BorderFactory.createCompoundBorder(BorderFactory.createLineBorder(new Color(49,70,96),1,true),BorderFactory.createEmptyBorder(8,12,8,12)));
+        selectedPhoto.setPreferredSize(new Dimension(145,105)); selectedPhoto.setOpaque(true);selectedPhoto.setBackground(new Color(19,29,44));
+        selectedPhoto.setForeground(new Color(160,180,200));card.add(selectedPhoto,BorderLayout.WEST);
+        JPanel info=new JPanel(new BorderLayout(4,4));JLabel caption=new JLabel("ОБРАНИЙ ПЕРЕДАВАЧ");caption.setForeground(new Color(94,190,255));info.add(caption,BorderLayout.NORTH);
+        selectedTitle.setFont(selectedTitle.getFont().deriveFont(Font.BOLD,16f));info.add(selectedTitle,BorderLayout.CENTER);
+        info.add(btn("Відкрити каталог / змінити фото",this::showCatalog),BorderLayout.SOUTH);card.add(info,BorderLayout.CENTER);
+        return card;
+    }
+    void initCatalog(){
+        Path dir=resolveDataFile().getParent();catalogFile=dir.resolve("vtx_catalog.tsv");photoDir=dir.resolve("photos");
+        try{Files.createDirectories(photoDir);}catch(IOException ex){status.setText(ex.getMessage());}
+        if(Files.exists(catalogFile))try{
+            for(String line:Files.readAllLines(catalogFile,StandardCharsets.UTF_8)){
+                String[] x=line.split("\t",-1);if(x.length==4)devices.add(new Device(unb64(x[0]),unb64(x[1]),unb64(x[2]),unb64(x[3])));
+            }
+        }catch(Exception ex){status.setText("Помилка каталогу: "+ex.getMessage());}
+        if(devices.isEmpty()&&!Files.exists(catalogFile)){
+            devices.add(new Device("TBS","Unify Pro32 HV","Перевірити за документацією",""));
+            devices.add(new Device("RushFPV","Tank Solo","Перевірити за документацією",""));
+            devices.add(new Device("AKK","Вкажіть модель","Перевірити за документацією",""));
+            devices.add(new Device("SpeedyBee","Вкажіть модель","Перевірити за документацією",""));
+            saveCatalog();
+        }
+    }
+    static String b64(String s){return Base64.getEncoder().encodeToString(s.getBytes(StandardCharsets.UTF_8));}
+    static String unb64(String s){return new String(Base64.getDecoder().decode(s),StandardCharsets.UTF_8);}
+    void saveCatalog(){try{StringBuilder b=new StringBuilder();for(Device d:devices)b.append(b64(d.maker())).append('\t').append(b64(d.model())).append('\t').append(b64(d.protocol())).append('\t').append(b64(d.image())).append('\n');Files.writeString(catalogFile,b.toString(),StandardCharsets.UTF_8);}catch(IOException ex){error(ex);}}
+    static ImageIcon thumbnail(String path,int w,int h){
+        if(path==null||path.isBlank())return null;
+        try{BufferedImage img=ImageIO.read(Path.of(path).toFile());if(img==null)return null;
+            double scale=Math.min((double)w/img.getWidth(),(double)h/img.getHeight());int iw=Math.max(1,(int)(img.getWidth()*scale)),ih=Math.max(1,(int)(img.getHeight()*scale));
+            return new ImageIcon(img.getScaledInstance(iw,ih,Image.SCALE_SMOOTH));
+        }catch(Exception ex){return null;}
+    }
+    void updateSelectedPhoto(){
+        Device chosen=null;for(Device d:devices)if(d.toString().equals(selectedVtx)){chosen=d;break;}
+        selectedTitle.setText(chosen==null?"Оберіть модель у каталозі":chosen.toString());
+        ImageIcon icon=chosen==null?null:thumbnail(chosen.image(),145,105);
+        selectedPhoto.setIcon(icon);selectedPhoto.setText(icon==null?"Немає фото":"");
+    }
+    void showCatalog(){
+        JDialog dialog=new JDialog(this,"Каталог VTX — фотографії",true);dialog.setSize(920,650);dialog.setLocationRelativeTo(this);
+        DefaultListModel<Device> model=new DefaultListModel<>();for(Device d:devices)model.addElement(d);
+        JList<Device> devList=new JList<>(model);devList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+        JTextField search=new JTextField();JPanel left=new JPanel(new BorderLayout(5,5));left.add(new JLabel("Пошук за виробником або моделлю:"),BorderLayout.NORTH);
+        JPanel searchPanel=new JPanel(new BorderLayout());searchPanel.add(search,BorderLayout.CENTER);left.add(searchPanel,BorderLayout.BEFORE_FIRST_LINE);
+        left.add(new JScrollPane(devList),BorderLayout.CENTER);left.setPreferredSize(new Dimension(300,400));
+        JLabel image=new JLabel("Фото ще не додано",SwingConstants.CENTER);image.setPreferredSize(new Dimension(440,350));image.setOpaque(true);image.setBackground(new Color(19,29,44));
+        JLabel info=new JLabel("Оберіть передавач");JPanel detail=new JPanel(new BorderLayout(5,5));detail.add(image,BorderLayout.CENTER);detail.add(info,BorderLayout.SOUTH);
+        Runnable refresh=()->{Device d=devList.getSelectedValue();if(d==null){image.setIcon(null);image.setText("Оберіть VTX");info.setText(" ");return;}ImageIcon icon=thumbnail(d.image(),440,350);image.setIcon(icon);image.setText(icon==null?"Фото ще не додано":"");info.setText("<html><b>"+html(d.toString())+"</b><br>Протокол: "+html(d.protocol())+"</html>");};
+        devList.addListSelectionListener(e->{if(!e.getValueIsAdjusting())refresh.run();});
+        search.getDocument().addDocumentListener(new SimpleDoc(()->{String q=search.getText().toLowerCase(Locale.ROOT);model.clear();for(Device d:devices)if(d.toString().toLowerCase(Locale.ROOT).contains(q))model.addElement(d);}));
+        JPanel actions=new JPanel(new FlowLayout(FlowLayout.LEFT,6,6));
+        actions.add(btn("Обрати для конфігурації",()->{Device d=devList.getSelectedValue();if(d==null)return;selectedVtx=d.toString();fTemplate.setText(d.model());store();updateSelectedPhoto();dialog.dispose();}));
+        actions.add(btn("Додати модель",()->{JTextField maker=new JTextField(),name=new JTextField(),proto=new JTextField("Не перевірено");JPanel form=new JPanel(new GridLayout(0,1,3,3));form.add(new JLabel("Виробник:"));form.add(maker);form.add(new JLabel("Модель:"));form.add(name);form.add(new JLabel("Протокол (якщо відомий):"));form.add(proto);if(JOptionPane.showConfirmDialog(dialog,form,"Нова модель",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION)return;if(maker.getText().isBlank()||name.getText().isBlank()){JOptionPane.showMessageDialog(dialog,"Вкажіть виробника й модель");return;}Device d=new Device(maker.getText().trim(),name.getText().trim(),proto.getText().trim(),"");devices.add(d);saveCatalog();model.addElement(d);devList.setSelectedValue(d,true);}));
+        actions.add(btn("Додати / замінити фото",()->{Device d=devList.getSelectedValue();if(d==null)return;JFileChooser chooser=new JFileChooser();chooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("Фото JPG, PNG, WEBP (за підтримки Java)","jpg","jpeg","png","webp"));if(chooser.showOpenDialog(dialog)!=JFileChooser.APPROVE_OPTION)return;try{Path source=chooser.getSelectedFile().toPath();if(ImageIO.read(source.toFile())==null)throw new IOException("Формат зображення не підтримується. Використайте JPG або PNG.");String ext=source.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".png")?".png":".jpg";Path dest=Files.createTempFile(photoDir,"vtx_",ext);Files.copy(source,dest,StandardCopyOption.REPLACE_EXISTING);int pos=devices.indexOf(d);Device updated=new Device(d.maker(),d.model(),d.protocol(),dest.toString());devices.set(pos,updated);int selected=devList.getSelectedIndex();model.set(selected,updated);devList.setSelectedIndex(selected);saveCatalog();refresh.run();updateSelectedPhoto();}catch(Exception ex){JOptionPane.showMessageDialog(dialog,ex.getMessage(),"Помилка фото",JOptionPane.ERROR_MESSAGE);}}));
+        actions.add(btn("Видалити модель",()->{Device d=devList.getSelectedValue();if(d==null)return;if(JOptionPane.showConfirmDialog(dialog,"Видалити «"+d+"»?","Підтвердження",JOptionPane.YES_NO_OPTION)!=JOptionPane.YES_OPTION)return;devices.remove(d);model.removeElement(d);saveCatalog();if(selectedVtx.equals(d.toString())){selectedVtx="";store();updateSelectedPhoto();}}));
+        actions.add(btn("Закрити",dialog::dispose));
+        dialog.setLayout(new BorderLayout(8,8));dialog.add(left,BorderLayout.WEST);dialog.add(detail,BorderLayout.CENTER);dialog.add(actions,BorderLayout.SOUTH);if(!model.isEmpty())devList.setSelectedIndex(0);setDarkTheme(true);dialog.setVisible(true);
+    }
+    static String html(String s){return s.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;");}
     static final String CATALOG="""
 VTX — протоколи / типи
 
@@ -197,14 +270,14 @@ RX — протоколи
     static Path resolveDataFile(){String os=System.getProperty("os.name").toLowerCase();Path base;if(os.contains("win")){String a=System.getenv("APPDATA");base=a!=null?Path.of(a):Path.of(System.getProperty("user.home"));}else if(os.contains("mac"))base=Path.of(System.getProperty("user.home"),"Library","Application Support");else{String x=System.getenv("XDG_CONFIG_HOME");base=x!=null?Path.of(x):Path.of(System.getProperty("user.home"),".config");}Path d=base.resolve(APP_NAME);try{Files.createDirectories(d);}catch(IOException ignored){}return d.resolve("vtx_configs.json");}
     void load(){dataFile=resolveDataFile();if(!Files.exists(dataFile))return;try{configs.addAll(Json.toConfigs(Files.readString(dataFile,StandardCharsets.UTF_8)));status.setText("Завантажено конфігурацій: "+configs.size());}catch(Exception e){status.setText("Колекцію не прочитано: "+e.getMessage());}}
     void persist(){try{Files.writeString(dataFile,Json.stringify(configs),StandardCharsets.UTF_8,StandardOpenOption.CREATE,StandardOpenOption.TRUNCATE_EXISTING,StandardOpenOption.WRITE);}catch(IOException e){status.setText("Не збережено: "+e.getMessage());}}
-    void setDarkTheme(boolean dark){Color bg=dark?new Color(45,45,48):UIManager.getColor("Panel.background");Color fg=dark?new Color(235,235,235):UIManager.getColor("Label.foreground");for(Window w:Window.getWindows())applyColors(w,bg,fg,dark);}
-    void applyColors(Component c,Color bg,Color fg,boolean dark){if(c instanceof JPanel||c instanceof JScrollPane||c instanceof JViewport)c.setBackground(bg);if(c instanceof JLabel||c instanceof JCheckBox)c.setForeground(fg);if(c instanceof JTextField||c instanceof JTextArea||c instanceof JList||c instanceof JComboBox||c instanceof JSpinner){c.setBackground(dark?new Color(60,60,63):Color.WHITE);c.setForeground(fg);}if(c instanceof Container co)for(Component x:co.getComponents())applyColors(x,bg,fg,dark);c.repaint();}
+    void setDarkTheme(boolean dark){Color bg=dark?new Color(22,31,46):UIManager.getColor("Panel.background");Color fg=dark?new Color(235,235,235):UIManager.getColor("Label.foreground");for(Window w:Window.getWindows())applyColors(w,bg,fg,dark);}
+    void applyColors(Component c,Color bg,Color fg,boolean dark){if(c instanceof JPanel||c instanceof JScrollPane||c instanceof JViewport)c.setBackground(bg);if(c instanceof JLabel||c instanceof JCheckBox)c.setForeground(fg);if(c instanceof JTextField||c instanceof JTextArea||c instanceof JList||c instanceof JComboBox||c instanceof JSpinner){c.setBackground(dark?new Color(35,48,67):Color.WHITE);c.setForeground(fg);}if(c instanceof Container co)for(Component x:co.getComponents())applyColors(x,bg,fg,dark);c.repaint();}
 
     static final class Json{
         static String escape(String s){StringBuilder b=new StringBuilder();for(char c:s.toCharArray()){switch(c){case '\\'->b.append("\\\\");case '"'->b.append("\\\"");case '\n'->b.append("\\n");case '\r'->b.append("\\r");case '\t'->b.append("\\t");default->b.append(c);}}return b.toString();}
-        static String stringify(List<Config> list){StringBuilder b=new StringBuilder("{\n  \"formatVersion\": ").append(JSON_VERSION).append(",\n  \"configs\": [\n");for(int i=0;i<list.size();i++){Config c=list.get(i);b.append("    {\n");field(b,"name",c.name,true);field(b,"template",c.template,true);field(b,"uart",c.uart,true);field(b,"protocol",c.protocol,true);field(b,"aux",c.aux,true);num(b,"dband",c.dband,true);num(b,"dchan",c.dchan,true);b.append("      \"powers\": [").append(c.powers[0]).append(", ").append(c.powers[1]).append(", ").append(c.powers[2]).append("],\n");bool(b,"incTable",c.incTable,true);bool(b,"includePortSetup",c.includePortSetup,true);b.append("      \"steps\": [\n");for(int j=0;j<c.steps.size();j++){BandStep s=c.steps.get(j);b.append("        [\"").append(escape(s.aux())).append("\", ").append(s.band()).append(", ").append(s.channel()).append(", ").append(s.start()).append(", ").append(s.end()).append("]").append(j+1<c.steps.size()?",":"").append('\n');}b.append("      ]\n    }").append(i+1<list.size()?",":"").append('\n');}return b.append("  ]\n}\n").toString();}
+        static String stringify(List<Config> list){StringBuilder b=new StringBuilder("{\n  \"formatVersion\": ").append(JSON_VERSION).append(",\n  \"configs\": [\n");for(int i=0;i<list.size();i++){Config c=list.get(i);b.append("    {\n");field(b,"name",c.name,true);field(b,"selectedVtx",c.selectedVtx,true);field(b,"template",c.template,true);field(b,"uart",c.uart,true);field(b,"protocol",c.protocol,true);field(b,"aux",c.aux,true);num(b,"dband",c.dband,true);num(b,"dchan",c.dchan,true);b.append("      \"powers\": [").append(c.powers[0]).append(", ").append(c.powers[1]).append(", ").append(c.powers[2]).append("],\n");bool(b,"incTable",c.incTable,true);bool(b,"includePortSetup",c.includePortSetup,true);b.append("      \"steps\": [\n");for(int j=0;j<c.steps.size();j++){BandStep s=c.steps.get(j);b.append("        [\"").append(escape(s.aux())).append("\", ").append(s.band()).append(", ").append(s.channel()).append(", ").append(s.start()).append(", ").append(s.end()).append("]").append(j+1<c.steps.size()?",":"").append('\n');}b.append("      ]\n    }").append(i+1<list.size()?",":"").append('\n');}return b.append("  ]\n}\n").toString();}
         static void field(StringBuilder b,String k,String v,boolean comma){b.append("      \"").append(k).append("\": \"").append(escape(v)).append("\"").append(comma?",":"").append('\n');}static void num(StringBuilder b,String k,int v,boolean comma){b.append("      \"").append(k).append("\": ").append(v).append(comma?",":"").append('\n');}static void bool(StringBuilder b,String k,boolean v,boolean comma){b.append("      \"").append(k).append("\": ").append(v).append(comma?",":"").append('\n');}
-        static List<Config> toConfigs(String raw){Object root=new Parser(raw).parse();if(!(root instanceof Map<?,?> m))throw new IllegalArgumentException("JSON root must be object");Object arr=m.get("configs");if(!(arr instanceof List<?> l))throw new IllegalArgumentException("JSON field 'configs' must be array");List<Config> out=new ArrayList<>();for(Object o:l){if(!(o instanceof Map<?,?> m2))throw new IllegalArgumentException("config must be object");Config c=new Config();c.name=str(m2,"name","Без назви");c.template=str(m2,"template","");c.uart=str(m2,"uart","UART1");c.protocol=str(m2,"protocol","TBS SmartAudio 2.0");c.aux=str(m2,"aux","AUX3");c.dband=num(m2,"dband",5);c.dchan=num(m2,"dchan",1);Object ps=m2.get("powers");if(ps instanceof List<?> p){for(int i=0;i<3&&i<p.size();i++)c.powers[i]=toInt(p.get(i),c.powers[i]);}c.incTable=bool(m2,"incTable",true);c.includePortSetup=bool(m2,"includePortSetup",false);Object ss=m2.get("steps");if(ss instanceof List<?> sl){List<BandStep> steps=new ArrayList<>();for(Object so:sl){if(so instanceof List<?> x&&x.size()==5)steps.add(new BandStep(String.valueOf(x.get(0)),toInt(x.get(1),0),toInt(x.get(2),1),toInt(x.get(3),900),toInt(x.get(4),1000)));}if(steps.size()==6)c.steps=steps;}out.add(c);}return out;}
+        static List<Config> toConfigs(String raw){Object root=new Parser(raw).parse();if(!(root instanceof Map<?,?> m))throw new IllegalArgumentException("JSON root must be object");Object arr=m.get("configs");if(!(arr instanceof List<?> l))throw new IllegalArgumentException("JSON field 'configs' must be array");List<Config> out=new ArrayList<>();for(Object o:l){if(!(o instanceof Map<?,?> m2))throw new IllegalArgumentException("config must be object");Config c=new Config();c.name=str(m2,"name","Без назви");c.selectedVtx=str(m2,"selectedVtx","");c.template=str(m2,"template","");c.uart=str(m2,"uart","UART1");c.protocol=str(m2,"protocol","TBS SmartAudio 2.0");c.aux=str(m2,"aux","AUX3");c.dband=num(m2,"dband",5);c.dchan=num(m2,"dchan",1);Object ps=m2.get("powers");if(ps instanceof List<?> p){for(int i=0;i<3&&i<p.size();i++)c.powers[i]=toInt(p.get(i),c.powers[i]);}c.incTable=bool(m2,"incTable",true);c.includePortSetup=bool(m2,"includePortSetup",false);Object ss=m2.get("steps");if(ss instanceof List<?> sl){List<BandStep> steps=new ArrayList<>();for(Object so:sl){if(so instanceof List<?> x&&x.size()==5)steps.add(new BandStep(String.valueOf(x.get(0)),toInt(x.get(1),0),toInt(x.get(2),1),toInt(x.get(3),900),toInt(x.get(4),1000)));}if(steps.size()==6)c.steps=steps;}out.add(c);}return out;}
         static String str(Map<?,?>m,String k,String d){Object v=m.get(k);return v==null?d:String.valueOf(v);}static int num(Map<?,?>m,String k,int d){return toInt(m.get(k),d);}static boolean bool(Map<?,?>m,String k,boolean d){Object v=m.get(k);return v instanceof Boolean x?x:d;}static int toInt(Object v,int d){return v instanceof Number n?n.intValue():d;}
         static final class Parser{final String s;int p=0;Parser(String s){this.s=s;}void ws(){while(p<s.length()&&Character.isWhitespace(s.charAt(p)))p++;}Object parse(){ws();Object v=value();ws();if(p!=s.length())err("Trailing data");return v;}Object value(){ws();if(p>=s.length())err("Unexpected end");char c=s.charAt(p);if(c=='{')return object();if(c=='[')return array();if(c=='"')return string();if(s.startsWith("true",p)){p+=4;return true;}if(s.startsWith("false",p)){p+=5;return false;}if(s.startsWith("null",p)){p+=4;return null;}if(c=='-'||Character.isDigit(c))return number();err("Unexpected token");return null;}
             Map<String,Object> object(){Map<String,Object> m=new LinkedHashMap<>();p++;ws();if(peek('}')){p++;return m;}while(true){ws();if(!peek('"'))err("Object key must be string");String k=string();ws();expect(':');m.put(k,value());ws();if(peek('}')){p++;return m;}expect(',');}}
@@ -215,5 +288,5 @@ RX — протоколи
         }
     }
 
-    public static void main(String[] args){try{UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());}catch(Exception ignored){}SwingUtilities.invokeLater(()->new VtxApp().setVisible(true));}
+    public static void main(String[] args){try{UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());}catch(Exception ignored){}SwingUtilities.invokeLater(()->{VtxApp app=new VtxApp();app.setDarkTheme(true);app.setVisible(true);});}
 }
