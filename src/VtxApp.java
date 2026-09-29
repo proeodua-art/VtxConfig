@@ -87,10 +87,11 @@ public class VtxApp extends JFrame {
     }
     String selectedVtx="";
     volatile String detectedPort="", detectedVersion="";
+    String importedDump=null; String importedDumpName="";
     final JTextArea out=new JTextArea(22,52); final JButton[] tabs=new JButton[3]; final JLabel status=new JLabel(" ");
 
     public VtxApp() {
-        super(APP_NAME+" 2.1.9 — офлайн-генератор"); setDefaultCloseOperation(EXIT_ON_CLOSE); setLayout(new BorderLayout(8,8));
+        super(APP_NAME+" 2.2.0 — офлайн-генератор"); setDefaultCloseOperation(EXIT_ON_CLOSE); setLayout(new BorderLayout(8,8));
         add(collectionPanel(),BorderLayout.WEST); add(centerPanel(),BorderLayout.CENTER); add(status,BorderLayout.SOUTH);
         initCatalog();
         load(); if(configs.isEmpty()) configs.add(new Config()); refreshList(); select(Math.min(idx,configs.size()-1));
@@ -108,10 +109,11 @@ public class VtxApp extends JFrame {
         JPanel right=new JPanel(new BorderLayout(5,5)); right.setBorder(new TitledBorder("Результат")); JPanel tabsP=new JPanel(new GridLayout(1,3,4,4));
         String[] ns={"CLI","VTX table CLI","VTX table JSON"}; for(int i=0;i<3;i++){final int k=i; tabs[i]=btn(ns[i],()->setView(k));tabsP.add(tabs[i]);} JPanel rightTop=new JPanel(new BorderLayout(4,4));
         rightTop.add(tabsP,BorderLayout.NORTH);
-        JPanel fcBar=new JPanel(new GridLayout(2,2,5,4));
+        JPanel fcBar=new JPanel(new GridLayout(3,2,5,4));
         fcBar.add(btn("ЗНАЙТИ FC (USB)",this::detectFc));
         fcBar.add(btn("BACKUP FC (USB)",this::backupFc));
         fcBar.add(btn("ІМПОРТ ДАМПА",this::importFcDump));
+        fcBar.add(btn("ПЕРЕГЛЯД ЗМІН",this::previewFcChanges));
         fcBar.add(btn("Відправити на FC",this::sendToFc));
         rightTop.add(fcBar,BorderLayout.SOUTH);
         right.add(rightTop,BorderLayout.NORTH);
@@ -357,6 +359,7 @@ RX — протоколи
             if(Files.size(file.toPath())>5_000_000)throw new IOException("Файл завеликий (максимум 5 МБ).");
             String dump=Files.readString(file.toPath(),StandardCharsets.UTF_8);
             String report=analyzeFcDump(dump,collect());
+            importedDump=dump; importedDumpName=file.getName();
             JTextArea area=new JTextArea(report,26,76);
             area.setEditable(false);area.setFont(new Font(Font.MONOSPACED,Font.PLAIN,13));
             area.setCaretPosition(0);
@@ -477,6 +480,95 @@ RX — протоколи
         if(actual==null)b.append("[?] ").append(label).append(": у дампі немає значення; у програмі ").append(desired).append('\n');
         else b.append(actual.equals(desired)?"[OK] ":"[!] ").append(label)
             .append(": дамп ").append(actual).append(" / програма ").append(desired).append('\n');
+    }
+
+    // A preview is intentionally read-only: never opens COM ports or sends CLI commands.
+    void previewFcChanges(){
+        if(importedDump==null){
+            JOptionPane.showMessageDialog(this,"Спочатку натисніть ІМПОРТ ДАМПА та виберіть повний dump саме цього FC.",
+                "Потрібен дамп",JOptionPane.INFORMATION_MESSAGE);return;
+        }
+        try{
+            String report=buildChangePreview(importedDump,collect(),importedDumpName);
+            JTextArea area=new JTextArea(report,27,78);
+            area.setEditable(false);area.setFont(new Font(Font.MONOSPACED,Font.PLAIN,13));
+            area.setBackground(Color.WHITE);area.setForeground(Color.BLACK);area.setCaretPosition(0);
+            JScrollPane pane=new JScrollPane(area);pane.setPreferredSize(new Dimension(840,550));
+            Object[] options={"Закрити", "Зберегти попередній перегляд"};
+            int answer=JOptionPane.showOptionDialog(this,pane,"Попередній перегляд — запис вимкнено",
+                JOptionPane.DEFAULT_OPTION,JOptionPane.WARNING_MESSAGE,null,options,options[0]);
+            if(answer==1){
+                File target=chooseFile(this,true,"vtx-preview.txt",null);
+                if(target!=null){
+                    if(target.exists()&&JOptionPane.showConfirmDialog(this,"Замінити файл?\n"+target,
+                        "Підтвердження",JOptionPane.YES_NO_OPTION)!=JOptionPane.YES_OPTION)return;
+                    Files.writeString(target.toPath(),report,StandardCharsets.UTF_8);
+                    status.setText("Попередній перегляд: "+target);
+                }
+            }
+        }catch(Exception e){error(e);}
+    }
+    static String buildChangePreview(String dump,Config c,String filename){
+        if(!dump.matches("(?s).*#\\s*version.*")||!dump.contains("# serial"))
+            throw new IllegalArgumentException("Потрібен повний Betaflight dump із розділом serial.");
+        Map<Integer,String[]> serial=new TreeMap<>();
+        for(String raw:dump.split("\\R")){
+            String line=raw.trim();
+            if(line.startsWith("serial ")){
+                String[] tokens=line.split("\\s+");
+                if(tokens.length>=7)try{serial.put(Integer.parseInt(tokens[1]),tokens);}catch(NumberFormatException ignored){}
+            }
+        }
+        if(serial.isEmpty())throw new IllegalArgumentException("Не знайдено повних serial-команд у дампі.");
+        int uart=Integer.parseInt(c.uart.substring(4))-1;
+        int desiredFlag=c.protocol.startsWith("IRC")?8192:2048;
+        String desiredName=c.protocol.startsWith("IRC")?"IRC Tramp":"SmartAudio";
+        StringBuilder b=new StringBuilder();
+        b.append("VtxConfig 2.2.0 — ПЕРЕГЛЯД ЗМІН (ЛИШЕ ЧИТАННЯ)\\n".replace("\\n","\n"));
+        b.append("Дамп: ").append(filename).append("\nОбрано: ").append(c.uart).append(" / ").append(desiredName).append("\n\n");
+        b.append("ПЕРЕВІРКА UART\n");
+        String[] selected=serial.get(uart);
+        boolean blocked=false;
+        if(selected==null){b.append("[СТОП] Обраний UART відсутній у дампі.\n");blocked=true;}
+        else{
+            int mask=Integer.parseInt(selected[2]);
+            b.append("Поточна команда: ").append(String.join(" ",selected)).append("\n");
+            if((mask&65)!=0){b.append("[СТОП] UART зайнятий MSP або Serial RX.\n");blocked=true;}
+            if((mask&10240)!=0&&(mask&desiredFlag)==0)b.append("[!] На UART призначено інший VTX-протокол.\n");
+            if((mask&desiredFlag)!=0)b.append("[OK] Потрібна VTX-функція вже призначена.\n");
+        }
+        List<Integer> oldVtx=new ArrayList<>();
+        for(var entry:serial.entrySet())if(entry.getKey()!=uart){
+            int mask=Integer.parseInt(entry.getValue()[2]);
+            if((mask&10240)!=0){
+                oldVtx.add(entry.getKey());
+                b.append("[!] Інша VTX-функція на UART").append(entry.getKey()+1)
+                    .append(". Не змінювати без підтвердження фізичного підключення.\n");
+            }
+        }
+        b.append("\nМОЖЛИВІ КОМАНДИ ДЛЯ РУЧНОЇ ПЕРЕВІРКИ (НЕ ВІДПРАВЛЯЮТЬСЯ)\n");
+        if(blocked)b.append("[СТОП] Генерацію serial-команд заблоковано.\n");
+        else{
+            for(int id:oldVtx){
+                String[] tokens=serial.get(id).clone();
+                int mask=Integer.parseInt(tokens[2]);
+                tokens[2]=String.valueOf(mask&~10240);
+                b.append("Було: ").append(String.join(" ",serial.get(id))).append("\n");
+                b.append("Може бути: ").append(String.join(" ",tokens)).append("\n");
+            }
+            String[] tokens=selected.clone();
+            int mask=Integer.parseInt(tokens[2]);
+            tokens[2]=String.valueOf((mask&~10240)|desiredFlag);
+            b.append("Було: ").append(String.join(" ",selected)).append("\n");
+            b.append("Може бути: ").append(String.join(" ",tokens)).append("\n");
+        }
+        b.append("\nДОДАТКОВІ ПЕРЕВІРКИ\n");
+        b.append("[?] Підтвердити фізичний TX-пін і модель VTX.\n");
+        b.append("[?] Перевірити таблицю частот, рівні потужності та AUX у звіті імпорту.\n");
+        b.append("[?] Перед будь-яким записом зробити свіжий BACKUP саме цього FC.\n");
+        b.append("[?] Без акумулятора VTX може бути вимкнений: dump не підтверджує його роботу.\n");
+        b.append("\nБЕЗПЕКА: НІЧОГО НЕ ВІДПРАВЛЕНО. КНОПКА ЗАПИСУ ЗАБЛОКОВАНА.\n");
+        return b.toString();
     }
 
     void sendToFc(){
