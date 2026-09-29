@@ -90,7 +90,7 @@ public class VtxApp extends JFrame {
     final JTextArea out=new JTextArea(22,52); final JButton[] tabs=new JButton[3]; final JLabel status=new JLabel(" ");
 
     public VtxApp() {
-        super(APP_NAME+" 2.1.5 — офлайн-генератор"); setDefaultCloseOperation(EXIT_ON_CLOSE); setLayout(new BorderLayout(8,8));
+        super(APP_NAME+" 2.1.6 — офлайн-генератор"); setDefaultCloseOperation(EXIT_ON_CLOSE); setLayout(new BorderLayout(8,8));
         add(collectionPanel(),BorderLayout.WEST); add(centerPanel(),BorderLayout.CENTER); add(status,BorderLayout.SOUTH);
         initCatalog();
         load(); if(configs.isEmpty()) configs.add(new Config()); refreshList(); select(Math.min(idx,configs.size()-1));
@@ -393,7 +393,7 @@ try {
   $sp.DiscardInBuffer(); $sp.Write("#`r`n"); Start-Sleep -Milliseconds 350
   $null=$sp.ReadExisting()
   $sp.Write("dump`r`n")
-  $data=''; $last=(Get-Date); $end=(Get-Date).AddSeconds(35)
+  $data=''; $last=(Get-Date); $end=(Get-Date).AddSeconds(55)
   while((Get-Date) -lt $end) {
     Start-Sleep -Milliseconds 120
     $part=$sp.ReadExisting()
@@ -408,14 +408,17 @@ try {
             Path tmp=Files.createTempFile("vtx-fc-backup-",".ps1");
             try{
                 Files.writeString(tmp,script,StandardCharsets.UTF_8);
+                Path output=Files.createTempFile("vtx-fc-backup-output-",".txt");
+                try {
                 Process process=new ProcessBuilder("powershell.exe","-NoProfile","-NonInteractive","-ExecutionPolicy","Bypass","-File",tmp.toString(),port)
-                    .redirectErrorStream(true).start();
-                if(!process.waitFor(43,TimeUnit.SECONDS)){
-                    process.destroyForcibly();throw new IOException("Тайм-аут читання FC");
+                    .redirectErrorStream(true).redirectOutput(output.toFile()).start();
+                if(!process.waitFor(80,TimeUnit.SECONDS)){
+                    process.destroyForcibly();process.waitFor(5,TimeUnit.SECONDS);throw new IOException("Тайм-аут читання FC (80 с). Перевірте USB та спробуйте знову.");
                 }
-                String result=new String(process.getInputStream().readAllBytes(),StandardCharsets.UTF_8);
+                String result=Files.readString(output,StandardCharsets.UTF_8);
                 if(process.exitValue()!=0)throw new IOException("Backup не вдався: "+result);
                 return result;
+                } finally { Files.deleteIfExists(output); }
             }finally{Files.deleteIfExists(tmp);}
         }
         static String send(String port,String data,long timeoutMs)throws Exception{String p=port.toUpperCase(Locale.ROOT);if(!p.matches("COM\\d+"))throw new IOException("Некоректний COM-порт: "+port);Process mode=new ProcessBuilder("cmd","/c","mode",p+":","BAUD=115200","PARITY=N","DATA=8","STOP=1").redirectErrorStream(true).start();mode.waitFor(3,TimeUnit.SECONDS);try(FileInputStream in=new FileInputStream("\\\\.\\"+p);FileOutputStream out=new FileOutputStream("\\\\.\\"+p)){out.write(data.getBytes(StandardCharsets.US_ASCII));out.flush();long end=System.currentTimeMillis()+timeoutMs;ByteArrayOutputStream buf=new ByteArrayOutputStream();byte[] b=new byte[1024];while(System.currentTimeMillis()<end){while(in.available()>0){int n=in.read(b);if(n>0)buf.write(b,0,n);}if(buf.size()>0&&new String(buf.toByteArray(),StandardCharsets.US_ASCII).contains("#"))break;Thread.sleep(20);}return buf.toString(StandardCharsets.US_ASCII);}}
