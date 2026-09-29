@@ -315,17 +315,31 @@ RX — протоколи
             JOptionPane.showMessageDialog(this,"Спочатку натисніть «ЗНАЙТИ FC (USB)».");return;
         }
         final String port=detectedPort;
+        String stamp=java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"));
+        // Ask before opening the serial port. Native FileDialog stays readable on Windows.
+        File chosen=chooseFile(this,true,"FC-"+port+"-"+stamp+".txt",null);
+        if(chosen==null){status.setText("Резервне копіювання скасовано.");return;}
+        final Path file=chosen.toPath().toAbsolutePath();
+        if(Files.exists(file)){
+            int answer=JOptionPane.showConfirmDialog(this,
+                "Файл уже існує. Замінити його?\n"+file,
+                "Підтвердження заміни",JOptionPane.YES_NO_OPTION,JOptionPane.WARNING_MESSAGE);
+            if(answer!=JOptionPane.YES_OPTION)return;
+        }
         status.setText("Читаємо резервну копію з "+port+". Не відключайте USB.");
         new Thread(()->{
             try{
                 String dump=WindowsSerial.backup(port);
                 if(!dump.contains("# dump") && !dump.contains("# version"))
                     throw new IOException("FC не повернув повний dump. Файл не створено.");
-                Path dir=resolveDataFile().getParent().resolve("backups");
-                Files.createDirectories(dir);
-                String stamp=java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"));
-                Path file=dir.resolve("FC-"+port+"-"+stamp+".txt");
-                Files.writeString(file,dump,StandardCharsets.UTF_8,StandardOpenOption.CREATE_NEW);
+                // Write only after successful reading; keep existing files safe on failure.
+                Path parent=file.getParent();
+                if(parent!=null)Files.createDirectories(parent);
+                Path temp=Files.createTempFile(parent,"vtx-backup-",".tmp");
+                try{
+                    Files.writeString(temp,dump,StandardCharsets.UTF_8);
+                    Files.move(temp,file,StandardCopyOption.REPLACE_EXISTING);
+                }finally{Files.deleteIfExists(temp);}
                 SwingUtilities.invokeLater(()->{
                     status.setText("Backup FC: "+file);
                     JOptionPane.showMessageDialog(this,"Резервну копію збережено:\n"+file+"\n\nПеред записом конфігурації перевіримо UART і VTX.");
