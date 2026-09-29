@@ -1,0 +1,38 @@
+name: Build Windows MSI
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Compile
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force out-win | Out-Null
+          javac -d out-win src/VtxApp.java
+          jar --create --file out-win/VtxConfig.jar --main-class VtxApp -C out-win .
+
+      - name: Package MSI
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist-win | Out-Null
+          jpackage --type msi --name VtxConfig --input out-win --main-jar VtxConfig.jar --dest dist-win --app-version 1.0.0 --win-shortcut --win-menu --win-dir-chooser --java-options '-Xmx256m'
+
+      - name: Upload MSI
+        uses: actions/upload-artifact@v4
+        with:
+          name: VtxConfig-Windows-MSI
+          path: dist-win/*.msi
