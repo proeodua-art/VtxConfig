@@ -91,7 +91,7 @@ public class VtxApp extends JFrame {
     final JTextArea out=new JTextArea(22,52); final JButton[] tabs=new JButton[3]; final JLabel status=new JLabel(" ");
 
     public VtxApp() {
-        super(APP_NAME+" 2.2.1 — офлайн-генератор"); setDefaultCloseOperation(EXIT_ON_CLOSE); setLayout(new BorderLayout(8,8));
+        super(APP_NAME+" 2.2.2 — офлайн-генератор"); setDefaultCloseOperation(EXIT_ON_CLOSE); setLayout(new BorderLayout(8,8));
         add(collectionPanel(),BorderLayout.WEST); add(centerPanel(),BorderLayout.CENTER); add(status,BorderLayout.SOUTH);
         initCatalog();
         load(); if(configs.isEmpty()) configs.add(new Config()); refreshList(); select(Math.min(idx,configs.size()-1));
@@ -115,6 +115,7 @@ public class VtxApp extends JFrame {
         fcBar.add(btn("ІМПОРТ ДАМПА",this::importFcDump));
         fcBar.add(btn("ПЕРЕГЛЯД ЗМІН",this::previewFcChanges));
         fcBar.add(btn("ЗЧИТАТИ FC І ПОРІВНЯТИ",this::compareLiveFc));
+        fcBar.add(btn("ПЕРЕВІРКА ПЕРЕД ЗАПИСОМ",this::preflightFc));
         fcBar.add(btn("Відправити на FC",this::sendToFc));
         rightTop.add(fcBar,BorderLayout.SOUTH);
         right.add(rightTop,BorderLayout.NORTH);
@@ -545,7 +546,7 @@ RX — протоколи
         return result;
     }
     static String buildLiveComparison(String live,String old,String oldName,Config config,String port,String path){
-        StringBuilder b=new StringBuilder("VtxConfig 2.2.1 — АКТУАЛЬНИЙ FC (ЛИШЕ ЧИТАННЯ)\n\n");
+        StringBuilder b=new StringBuilder("VtxConfig 2.2.2 — АКТУАЛЬНИЙ FC (ЛИШЕ ЧИТАННЯ)\n\n");
         b.append("USB: ").append(port).append("\nСвіжий backup: ").append(path).append("\n");
         b.append("Плата: ").append(dumpValue(live,"board_name")).append("\n");
         b.append("Версія: ").append(live.lines().filter(line->line.startsWith("# Betaflight ")).findFirst().orElse("невідомо")).append("\n");
@@ -660,6 +661,89 @@ RX — протоколи
         b.append("[?] Без акумулятора VTX може бути вимкнений: dump не підтверджує його роботу.\n");
         b.append("\nБЕЗПЕКА: НІЧОГО НЕ ВІДПРАВЛЕНО. КНОПКА ЗАПИСУ ЗАБЛОКОВАНА.\n");
         return b.toString();
+    }
+
+    // Read-only safety gate: checks local confirmations, then reads a fresh dump and saves it.
+    // Does not arm, unlock, or send any configuration commands to the FC.
+    void preflightFc(){
+        if(detectedPort.isBlank()){
+            JOptionPane.showMessageDialog(this,"Спочатку натисніть ЗНАЙТИ FC (USB).","Потрібен FC",JOptionPane.WARNING_MESSAGE);return;
+        }
+        Config desired=collect();
+        String model=selectedVtx.isBlank()?desired.template:selectedVtx;
+        JPanel form=new JPanel(new GridLayout(0,1,4,5));
+        JLabel info=new JLabel("FC: "+detectedPort+" | "+desired.uart+" | "+desired.protocol);
+        JTextField actualModel=new JTextField(model,30);
+        JCheckBox modelOk=new JCheckBox("Модель VTX перевірено на самому передавачі");
+        JCheckBox protocolOk=new JCheckBox("Протокол VTX підтверджено за документацією або маркуванням");
+        JCheckBox txOk=new JCheckBox("Сигнальний провід VTX підключено до TX вибраного UART");
+        JCheckBox propsOk=new JCheckBox("Пропелери знято; Betaflight Configurator закритий");
+        JCheckBox batteryOk=new JCheckBox("Розумію: без акумулятора VTX може не працювати");
+        form.add(info);form.add(new JLabel("Фактична модель VTX (вкажіть вручну):"));form.add(actualModel);
+        for(JCheckBox cb:List.of(modelOk,protocolOk,txOk,propsOk,batteryOk))form.add(cb);
+        int ans=JOptionPane.showConfirmDialog(this,form,"Перевірка перед записом — ЛИШЕ ЧИТАННЯ",JOptionPane.OK_CANCEL_OPTION,JOptionPane.PLAIN_MESSAGE);
+        if(ans!=JOptionPane.OK_OPTION)return;
+        if(actualModel.getText().isBlank()||!modelOk.isSelected()||!protocolOk.isSelected()||!txOk.isSelected()||!propsOk.isSelected()||!batteryOk.isSelected()){
+            JOptionPane.showMessageDialog(this,"Заповніть модель і підтвердіть усі перевірки. Запис залишається заблокованим.","Перевірка не завершена",JOptionPane.WARNING_MESSAGE);return;
+        }
+        final String checkedModel=actualModel.getText().trim();
+        final String port=detectedPort;
+        String stamp=java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"));
+        File chosen=chooseFile(this,true,"FC-PREFLIGHT-"+port+"-"+stamp+".txt",null);
+        if(chosen==null)return;
+        Path target=chosen.toPath().toAbsolutePath();
+        if(Files.exists(target)&&JOptionPane.showConfirmDialog(this,"Замінити файл?\n"+target,"Підтвердження",JOptionPane.YES_NO_OPTION)!=JOptionPane.YES_OPTION)return;
+        status.setText("Зчитування FC для перевірки: "+port);
+        new Thread(()->{
+            try{
+                String fresh=WindowsSerial.backup(port);
+                if(!fresh.matches("(?s).*#\\s*version.*")||!fresh.contains("# serial")||serialLines(fresh).isEmpty())
+                    throw new IOException("Неповний dump FC. Перевірку зупинено.");
+                Path parent=target.getParent();if(parent!=null)Files.createDirectories(parent);
+                Path temp=Files.createTempFile(parent,"vtx-preflight-",".tmp");
+                try{Files.writeString(temp,fresh,StandardCharsets.UTF_8);Files.move(temp,target,StandardCopyOption.REPLACE_EXISTING);}
+                finally{Files.deleteIfExists(temp);}
+                StringBuilder report=new StringBuilder("VtxConfig 2.2.2 — ПЕРЕВІРКА ПЕРЕД ЗАПИСОМ (ЛИШЕ ЧИТАННЯ)\n\n");
+                report.append("COM: ").append(port).append("\nBackup: ").append(target).append("\nПлата: ").append(dumpValue(fresh,"board_name"))
+                      .append("\nФактична модель (вказана користувачем): ").append(checkedModel)
+                      .append("\nОбрано: ").append(desired.uart).append(" / ").append(desired.protocol).append("\n\n");
+                Map<Integer,String> ports=serialLines(fresh);
+                int uartNo=Integer.parseInt(desired.uart.substring(4));
+                String current=ports.get(uartNo-1);
+                report.append("Вибраний порт у свіжому dump: ").append(current==null?"НЕ ЗНАЙДЕНО":current).append("\n");
+                if(current==null)report.append("[СТОП] Немає serial-рядка вибраного UART.\n");
+                else {
+                    String[] parts=current.trim().split("\\s+");
+                    try{
+                        int mask=Integer.parseInt(parts[0]);
+                        int wanted=desired.protocol.startsWith("IRC")?8192:2048;
+                        if((mask & wanted)==0)report.append("[!] Потрібна функція VTX на вибраному UART не налаштована.\n");
+                        else report.append("[OK] Функція VTX для вибраного протоколу присутня у масці UART.\n");
+                        if((mask & 64)!=0)report.append("[СТОП] На цьому UART налаштовано Serial RX. Не перезаписуйте порт приймача.\n");
+                    }catch(Exception ex){report.append("[СТОП] Неможливо розібрати маску UART.\n");}
+                }
+                String oldBoard=importedDump==null?"невідомо":dumpValue(importedDump,"board_name");
+                String newBoard=dumpValue(fresh,"board_name");
+                if(!oldBoard.equals("невідомо")&&!newBoard.equals("невідомо")&&!oldBoard.equalsIgnoreCase(newBoard))
+                    report.append("[СТОП] Імпортований dump належить іншій платі: ").append(oldBoard).append("\n");
+                report.append("\nПідтвердження користувача: модель, протокол, TX, безпека — так.\n")
+                      .append("Це лише ручні підтвердження, не апаратне визначення VTX.\n")
+                      .append("Без живлення VTX його роботу перевірити не можна.\n\n")
+                      .append("ЗАПИС ЗАБЛОКОВАНО. ЖОДНИХ КОМАНД НА FC НЕ ВІДПРАВЛЕНО.\n");
+                String result=report.toString();
+                SwingUtilities.invokeLater(()->{
+                    status.setText("Перевірку завершено. Свіжий backup: "+target);
+                    JTextArea area=new JTextArea(result,26,78);area.setEditable(false);area.setFont(new Font(Font.MONOSPACED,Font.PLAIN,13));
+                    area.setBackground(Color.WHITE);area.setForeground(Color.BLACK);area.setCaretPosition(0);
+                    JScrollPane scroll=new JScrollPane(area);scroll.setPreferredSize(new Dimension(820,530));
+                    int choice=JOptionPane.showOptionDialog(this,scroll,"Перевірка перед записом — лише читання",JOptionPane.DEFAULT_OPTION,JOptionPane.INFORMATION_MESSAGE,null,new Object[]{"Закрити","Зберегти звіт"},"Закрити");
+                    if(choice==1){File dest=chooseFile(this,true,"FC-preflight-report.txt",null);if(dest!=null)try{
+                        if(dest.exists()&&JOptionPane.showConfirmDialog(this,"Замінити звіт?","Підтвердження",JOptionPane.YES_NO_OPTION)!=JOptionPane.YES_OPTION)return;
+                        Files.writeString(dest.toPath(),result,StandardCharsets.UTF_8);
+                    }catch(Exception ex){error(ex);}}
+                });
+            }catch(Exception ex){SwingUtilities.invokeLater(()->error(ex));}
+        },"fc-preflight").start();
     }
 
     void sendToFc(){
