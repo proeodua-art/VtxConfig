@@ -95,7 +95,7 @@ public class VtxApp extends JFrame {
     final JTextArea out=new JTextArea(22,52); final JButton[] tabs=new JButton[3]; final JLabel status=new JLabel(" ");
 
     public VtxApp() {
-        super(APP_NAME+" 2.3.0 — офлайн-генератор"); setDefaultCloseOperation(EXIT_ON_CLOSE); setLayout(new BorderLayout(8,8));
+        super(APP_NAME+" 2.3.1 — офлайн-генератор"); setDefaultCloseOperation(EXIT_ON_CLOSE); setLayout(new BorderLayout(8,8));
         add(collectionPanel(),BorderLayout.WEST); add(centerPanel(),BorderLayout.CENTER); add(status,BorderLayout.SOUTH);
         initCatalog();
         load(); if(configs.isEmpty()) configs.add(new Config()); refreshList(); select(Math.min(idx,configs.size()-1));
@@ -290,6 +290,7 @@ public class VtxApp extends JFrame {
         }
         // Merge bundled offline site catalog without replacing user-added models.
         mergeOfflineSiteCatalog();
+        repairCatalogPhotos();
     }
     void mergeOfflineSiteCatalog(){
         Path root=catalogFile.getParent();
@@ -342,6 +343,33 @@ public class VtxApp extends JFrame {
             if(added>0)saveCatalog();
         }catch(Exception ex){status.setText("Помилка імпорту офлайн-каталогу: "+ex.getMessage());}
     }
+    // Match only an exact manufacturer/model record from the bundled TSV. Keep manual photos.
+    void repairCatalogPhotos(){
+        Path seed=catalogFile.getParent().resolve("site_catalog.tsv");
+        if(!Files.isRegularFile(seed))return;
+        Map<String,String> known=new HashMap<>();
+        try{
+            for(String line:Files.readAllLines(seed,StandardCharsets.UTF_8)){
+                String[] x=line.split("\t",-1);
+                if(x.length!=4)continue;
+                String maker=unb64(x[0]),model=unb64(x[1]),photo=unb64(x[3]);
+                if(!photo.isBlank())known.put((maker+"|"+model).toLowerCase(Locale.ROOT),photo);
+            }
+            boolean changed=false;
+            for(int i=0;i<devices.size();i++){
+                Device d=devices.get(i);
+                if(thumbnail(d.image(),8,8)!=null)continue; // never replace working user photos
+                String photo=known.get((d.maker()+"|"+d.model()).toLowerCase(Locale.ROOT));
+                if(photo==null)continue;
+                Path candidate=catalogFile.getParent().resolve(photo).normalize();
+                if(!candidate.startsWith(photoDir.normalize())||!Files.isRegularFile(candidate))continue;
+                if(thumbnail(candidate.toString(),8,8)==null)continue;
+                devices.set(i,new Device(d.maker(),d.model(),d.protocol(),candidate.toString()));
+                changed=true;
+            }
+            if(changed)saveCatalog();
+        }catch(Exception ex){status.setText("Автоматична перевірка фото: "+ex.getMessage());}
+    }
     static Path applicationDirectory(){
         String appPath=System.getProperty("jpackage.app-path", "");
         if(!appPath.isBlank())return Path.of(appPath).toAbsolutePath().getParent();
@@ -379,14 +407,25 @@ public class VtxApp extends JFrame {
         JDialog dialog=new JDialog(this,"Каталог VTX — фотографії",true);dialog.setSize(920,650);dialog.setLocationRelativeTo(this);
         DefaultListModel<Device> model=new DefaultListModel<>();for(Device d:devices)model.addElement(d);
         JList<Device> devList=new JList<>(model);devList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
-        JTextField search=new JTextField();JPanel left=new JPanel(new BorderLayout(5,5));left.add(new JLabel("Пошук за виробником або моделлю:"),BorderLayout.NORTH);
-        JPanel searchPanel=new JPanel(new BorderLayout());searchPanel.add(search,BorderLayout.CENTER);left.add(searchPanel,BorderLayout.BEFORE_FIRST_LINE);
+        JTextField search=new JTextField();search.putClientProperty("JTextField.placeholderText","Наприклад: TBS або Pro32");
+        JPanel left=new JPanel(new BorderLayout(5,5));
+        JPanel searchPanel=new JPanel(new BorderLayout(3,3));
+        searchPanel.add(new JLabel("Пошук за виробником або моделлю:"),BorderLayout.NORTH);
+        searchPanel.add(search,BorderLayout.CENTER);
+        JLabel resultCount=new JLabel("Знайдено моделей: "+model.size());
+        searchPanel.add(resultCount,BorderLayout.SOUTH);
+        left.add(searchPanel,BorderLayout.NORTH);
         left.add(new JScrollPane(devList),BorderLayout.CENTER);left.setPreferredSize(new Dimension(300,400));
-        JLabel image=new JLabel("Фото ще не додано",SwingConstants.CENTER);image.setPreferredSize(new Dimension(440,350));image.setOpaque(true);image.setBackground(new Color(19,29,44));
+        JLabel image=new JLabel("Фото ще не додано",SwingConstants.CENTER);image.setPreferredSize(new Dimension(440,350));image.setOpaque(true);image.setBackground(Color.WHITE);image.setForeground(Color.BLACK);
         JLabel info=new JLabel("Оберіть передавач");JPanel detail=new JPanel(new BorderLayout(5,5));detail.add(image,BorderLayout.CENTER);detail.add(info,BorderLayout.SOUTH);
         Runnable refresh=()->{Device d=devList.getSelectedValue();if(d==null){image.setIcon(null);image.setText("Оберіть VTX");info.setText(" ");return;}ImageIcon icon=thumbnail(d.image(),440,350);image.setIcon(icon);image.setText(icon==null?"Фото ще не додано":"");info.setText("<html><b>"+html(d.toString())+"</b><br>Протокол: "+html(d.protocol())+"</html>");};
         devList.addListSelectionListener(e->{if(!e.getValueIsAdjusting())refresh.run();});
-        search.getDocument().addDocumentListener(new SimpleDoc(()->{String q=search.getText().toLowerCase(Locale.ROOT);model.clear();for(Device d:devices)if(d.toString().toLowerCase(Locale.ROOT).contains(q))model.addElement(d);}));
+        search.getDocument().addDocumentListener(new SimpleDoc(()->{
+            String q=search.getText().trim().toLowerCase(Locale.ROOT);
+            model.clear();for(Device d:devices)if(d.toString().toLowerCase(Locale.ROOT).contains(q))model.addElement(d);
+            resultCount.setText("Знайдено моделей: "+model.size());
+            if(!model.isEmpty())devList.setSelectedIndex(0);else refresh.run();
+        }));
         JPanel actions=new JPanel(new FlowLayout(FlowLayout.LEFT,6,6));
         actions.add(btn("Обрати для конфігурації",()->{Device d=devList.getSelectedValue();if(d==null)return;selectedVtx=d.toString();loading=true;fTemplate.setText(d.model());
             if(d.maker().equals("TBS")&&d.model().equals(DP_MODEL)){
@@ -411,7 +450,7 @@ public class VtxApp extends JFrame {
             catch(Exception ex){JOptionPane.showMessageDialog(dialog,"Каталог: "+catalogFile.getParent()+"\n"+ex.getMessage());}
         }));
         actions.add(btn("Закрити",dialog::dispose));
-        dialog.setLayout(new BorderLayout(8,8));dialog.add(left,BorderLayout.WEST);dialog.add(detail,BorderLayout.CENTER);dialog.add(actions,BorderLayout.SOUTH);if(!model.isEmpty())devList.setSelectedIndex(0);setDarkTheme(true);dialog.setVisible(true);
+        dialog.setLayout(new BorderLayout(8,8));dialog.add(left,BorderLayout.WEST);dialog.add(detail,BorderLayout.CENTER);dialog.add(actions,BorderLayout.SOUTH);if(!model.isEmpty())devList.setSelectedIndex(0);setDarkTheme(true);image.setBackground(Color.WHITE);image.setForeground(Color.BLACK);dialog.setVisible(true);
     }
     static String html(String s){return s.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;");}
     static final String CATALOG="""
