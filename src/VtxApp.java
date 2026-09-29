@@ -90,7 +90,7 @@ public class VtxApp extends JFrame {
     final JTextArea out=new JTextArea(22,52); final JButton[] tabs=new JButton[3]; final JLabel status=new JLabel(" ");
 
     public VtxApp() {
-        super(APP_NAME+" 2.1.3 — офлайн-генератор"); setDefaultCloseOperation(EXIT_ON_CLOSE); setLayout(new BorderLayout(8,8));
+        super(APP_NAME+" 2.1.5 — офлайн-генератор"); setDefaultCloseOperation(EXIT_ON_CLOSE); setLayout(new BorderLayout(8,8));
         add(collectionPanel(),BorderLayout.WEST); add(centerPanel(),BorderLayout.CENTER); add(status,BorderLayout.SOUTH);
         initCatalog();
         load(); if(configs.isEmpty()) configs.add(new Config()); refreshList(); select(Math.min(idx,configs.size()-1));
@@ -161,10 +161,43 @@ public class VtxApp extends JFrame {
     void refreshList(){listModel.clear();for(Config c:configs)listModel.addElement(c.name);}void store(){if(loading||idx<0||idx>=configs.size())return;configs.set(idx,collect());persist();loading=true;int s=idx;refreshList();list.setSelectedIndex(s);loading=false;}
     void newCfg(){String n=JOptionPane.showInputDialog(this,"Назва конфігурації:","Нова конфігурація");if(n==null||n.isBlank())return;Config c=new Config();c.name=n.trim();configs.add(c);persist();refreshList();select(configs.size()-1);}void dupCfg(){store();Config c=configs.get(idx).copy();c.name+=" (копія)";configs.add(c);persist();refreshList();select(configs.size()-1);}void delCfg(){if(configs.size()<=1){JOptionPane.showMessageDialog(this,"Має залишитися хоча б одна конфігурація.");return;}if(JOptionPane.showConfirmDialog(this,"Видалити «"+configs.get(idx).name+"»?","Підтвердження",JOptionPane.YES_NO_OPTION)!=JOptionPane.YES_OPTION)return;configs.remove(idx);persist();refreshList();select(Math.min(idx,configs.size()-1));}
     void copyOut(){StringSelection s=new StringSelection(out.getText());Toolkit.getDefaultToolkit().getSystemClipboard().setContents(s,s);status.setText("Скопійовано в буфер обміну.");}
-    void saveCurrent(){String[] n={"vtx_diff_all.txt","vtx_table.txt","vtx_table.json"};JFileChooser fc=new JFileChooser();fc.setSelectedFile(new File(n[view]));if(fc.showSaveDialog(this)!=JFileChooser.APPROVE_OPTION)return;try{Files.writeString(fc.getSelectedFile().toPath(),out.getText(),StandardCharsets.UTF_8);status.setText("Збережено: "+fc.getSelectedFile());}catch(IOException e){error(e);}}
-    void saveAllThree(){JFileChooser fc=new JFileChooser();fc.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);if(fc.showSaveDialog(this)!=JFileChooser.APPROVE_OPTION)return;Path d=fc.getSelectedFile().toPath();Config c=collect();try{Files.writeString(d.resolve("vtx_diff_all.txt"),buildCli(c),StandardCharsets.UTF_8);Files.writeString(d.resolve("vtx_table.txt"),buildTableCli(),StandardCharsets.UTF_8);Files.writeString(d.resolve("vtx_table.json"),buildTableJson(c),StandardCharsets.UTF_8);status.setText("Три файли збережено у "+d);}catch(IOException e){error(e);}}
-    void exportAll(){store();JFileChooser fc=new JFileChooser();fc.setSelectedFile(new File("vtx_configs.json"));if(fc.showSaveDialog(this)!=JFileChooser.APPROVE_OPTION)return;try{Files.writeString(fc.getSelectedFile().toPath(),Json.stringify(configs),StandardCharsets.UTF_8);status.setText("Колекцію збережено: "+fc.getSelectedFile());}catch(IOException e){error(e);}}
-    void importAll(){JFileChooser fc=new JFileChooser();if(fc.showOpenDialog(this)!=JFileChooser.APPROVE_OPTION)return;try{String raw=Files.readString(fc.getSelectedFile().toPath(),StandardCharsets.UTF_8);List<Config> incoming=Json.toConfigs(raw);Set<String> known=new HashSet<>();for(Config c:configs)known.add(c.name);int added=0;for(Config c:incoming)if(known.add(c.name)){configs.add(c);added++;}persist();refreshList();select(configs.size()-1);status.setText("Імпортовано: "+added);}catch(Exception e){error(e);}}
+    // Native Windows file dialogs use the OS palette, independently of the dark Swing theme.
+    static File chooseFile(Window owner, boolean save, String initialName, String photoExtensions){
+        Frame frame=owner instanceof Frame f?f:null;
+        FileDialog dlg=new FileDialog(frame,save?"Зберегти файл":"Відкрити файл",save?FileDialog.SAVE:FileDialog.LOAD);
+        if(initialName!=null)dlg.setFile(initialName);
+        if(photoExtensions!=null)dlg.setFilenameFilter((dir,name)->name.toLowerCase(Locale.ROOT).matches(".*\\.(jpg|jpeg|png|webp)"));
+        dlg.setVisible(true);
+        if(dlg.getFile()==null)return null;
+        return new File(dlg.getDirectory(),dlg.getFile());
+    }
+    // A directory picker is still Swing; temporarily restore the OS defaults for its modal lifetime.
+    static File chooseDirectory(Component parent){
+        javax.swing.UIDefaults defaults=UIManager.getDefaults();
+        Map<String,Object> previous=new HashMap<>();
+        String[] keys={"Panel.background","Viewport.background","OptionPane.background","CheckBox.background",
+            "RadioButton.background","ScrollPane.background","Label.foreground","CheckBox.foreground",
+            "RadioButton.foreground","ComboBox.foreground","ComboBox.selectionForeground","List.foreground",
+            "List.selectionForeground","TextField.foreground","TextArea.foreground","Spinner.foreground",
+            "FormattedTextField.foreground","OptionPane.messageForeground","TitledBorder.titleColor",
+            "Menu.foreground","MenuItem.foreground","ComboBox.background","ComboBox.selectionBackground",
+            "List.background","TextField.background","TextArea.background","Spinner.background",
+            "FormattedTextField.background","List.selectionBackground","TextField.caretForeground",
+            "TextArea.caretForeground"};
+        for(String key:keys){previous.put(key,UIManager.get(key));UIManager.put(key,null);}
+        try{
+            JFileChooser chooser=new JFileChooser();
+            chooser.setDialogTitle("Оберіть папку для збереження");
+            chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
+            return chooser.showSaveDialog(parent)==JFileChooser.APPROVE_OPTION?chooser.getSelectedFile():null;
+        }finally{
+            for(String key:keys)UIManager.put(key,previous.get(key));
+        }
+    }
+    void saveCurrent(){String[] n={"vtx_diff_all.txt","vtx_table.txt","vtx_table.json"};File chosen=chooseFile(this,true,n[view],null);if(chosen==null)return;try{Files.writeString(chosen.toPath(),out.getText(),StandardCharsets.UTF_8);status.setText("Збережено: "+chosen);}catch(IOException e){error(e);}}
+    void saveAllThree(){File chosen=chooseDirectory(this);if(chosen==null)return;Path d=chosen.toPath();Config c=collect();try{Files.writeString(d.resolve("vtx_diff_all.txt"),buildCli(c),StandardCharsets.UTF_8);Files.writeString(d.resolve("vtx_table.txt"),buildTableCli(),StandardCharsets.UTF_8);Files.writeString(d.resolve("vtx_table.json"),buildTableJson(c),StandardCharsets.UTF_8);status.setText("Три файли збережено у "+d);}catch(IOException e){error(e);}}
+    void exportAll(){store();File chosen=chooseFile(this,true,"vtx_configs.json",null);if(chosen==null)return;try{Files.writeString(chosen.toPath(),Json.stringify(configs),StandardCharsets.UTF_8);status.setText("Колекцію збережено: "+chosen);}catch(IOException e){error(e);}}
+    void importAll(){File chosen=chooseFile(this,false,null,null);if(chosen==null)return;try{String raw=Files.readString(chosen.toPath(),StandardCharsets.UTF_8);List<Config> incoming=Json.toConfigs(raw);Set<String> known=new HashSet<>();for(Config c:configs)known.add(c.name);int added=0;for(Config c:incoming)if(known.add(c.name)){configs.add(c);added++;}persist();refreshList();select(configs.size()-1);status.setText("Імпортовано: "+added);}catch(Exception e){error(e);}}
     void openDataDir(){try{Desktop.getDesktop().open(dataFile.getParent().toFile());}catch(Exception e){JOptionPane.showMessageDialog(this,"Тека даних:\n"+dataFile.getParent());}}void error(Exception e){JOptionPane.showMessageDialog(this,e.getMessage(),"Помилка",JOptionPane.ERROR_MESSAGE);}
 
     JPanel selectedPanel(){
@@ -223,7 +256,7 @@ public class VtxApp extends JFrame {
         JPanel actions=new JPanel(new FlowLayout(FlowLayout.LEFT,6,6));
         actions.add(btn("Обрати для конфігурації",()->{Device d=devList.getSelectedValue();if(d==null)return;selectedVtx=d.toString();fTemplate.setText(d.model());store();updateSelectedPhoto();dialog.dispose();}));
         actions.add(btn("Додати модель",()->{JTextField maker=new JTextField(),name=new JTextField(),proto=new JTextField("Не перевірено");JPanel form=new JPanel(new GridLayout(0,1,3,3));form.add(new JLabel("Виробник:"));form.add(maker);form.add(new JLabel("Модель:"));form.add(name);form.add(new JLabel("Протокол (якщо відомий):"));form.add(proto);if(JOptionPane.showConfirmDialog(dialog,form,"Нова модель",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION)return;if(maker.getText().isBlank()||name.getText().isBlank()){JOptionPane.showMessageDialog(dialog,"Вкажіть виробника й модель");return;}Device d=new Device(maker.getText().trim(),name.getText().trim(),proto.getText().trim(),"");devices.add(d);saveCatalog();model.addElement(d);devList.setSelectedValue(d,true);}));
-        actions.add(btn("Додати / замінити фото",()->{Device d=devList.getSelectedValue();if(d==null)return;JFileChooser chooser=new JFileChooser();chooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("Фото JPG, PNG, WEBP (за підтримки Java)","jpg","jpeg","png","webp"));if(chooser.showOpenDialog(dialog)!=JFileChooser.APPROVE_OPTION)return;try{Path source=chooser.getSelectedFile().toPath();if(ImageIO.read(source.toFile())==null)throw new IOException("Формат зображення не підтримується. Використайте JPG або PNG.");String ext=source.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".png")?".png":".jpg";Path dest=Files.createTempFile(photoDir,"vtx_",ext);Files.copy(source,dest,StandardCopyOption.REPLACE_EXISTING);int pos=devices.indexOf(d);Device updated=new Device(d.maker(),d.model(),d.protocol(),dest.toString());devices.set(pos,updated);int selected=devList.getSelectedIndex();model.set(selected,updated);devList.setSelectedIndex(selected);saveCatalog();refresh.run();updateSelectedPhoto();}catch(Exception ex){JOptionPane.showMessageDialog(dialog,ex.getMessage(),"Помилка фото",JOptionPane.ERROR_MESSAGE);}}));
+        actions.add(btn("Додати / замінити фото",()->{Device d=devList.getSelectedValue();if(d==null)return;File chosen=chooseFile(dialog,false,null,"photos");if(chosen==null)return;try{Path source=chosen.toPath();if(ImageIO.read(source.toFile())==null)throw new IOException("Формат зображення не підтримується. Використайте JPG або PNG.");String ext=source.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".png")?".png":".jpg";Path dest=Files.createTempFile(photoDir,"vtx_",ext);Files.copy(source,dest,StandardCopyOption.REPLACE_EXISTING);int pos=devices.indexOf(d);Device updated=new Device(d.maker(),d.model(),d.protocol(),dest.toString());devices.set(pos,updated);int selected=devList.getSelectedIndex();model.set(selected,updated);devList.setSelectedIndex(selected);saveCatalog();refresh.run();updateSelectedPhoto();}catch(Exception ex){JOptionPane.showMessageDialog(dialog,ex.getMessage(),"Помилка фото",JOptionPane.ERROR_MESSAGE);}}));
         actions.add(btn("Видалити модель",()->{Device d=devList.getSelectedValue();if(d==null)return;if(JOptionPane.showConfirmDialog(dialog,"Видалити «"+d+"»?","Підтвердження",JOptionPane.YES_NO_OPTION)!=JOptionPane.YES_OPTION)return;devices.remove(d);model.removeElement(d);saveCatalog();if(selectedVtx.equals(d.toString())){selectedVtx="";store();updateSelectedPhoto();}}));
         actions.add(btn("Закрити",dialog::dispose));
         dialog.setLayout(new BorderLayout(8,8));dialog.add(left,BorderLayout.WEST);dialog.add(detail,BorderLayout.CENTER);dialog.add(actions,BorderLayout.SOUTH);if(!model.isEmpty())devList.setSelectedIndex(0);setDarkTheme(true);dialog.setVisible(true);
@@ -468,7 +501,6 @@ try {
     public static void main(String[] args){try{UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());}catch(Exception ignored){}installReadableDarkDefaults();SwingUtilities.invokeLater(()->{VtxApp app=new VtxApp();app.setDarkTheme(true);app.setVisible(true);});}
 }
 
-    }
 
     public static void main(String[] args){try{UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());}catch(Exception ignored){}installReadableDarkDefaults();SwingUtilities.invokeLater(()->{VtxApp app=new VtxApp();app.setDarkTheme(true);app.setVisible(true);});}
 }
