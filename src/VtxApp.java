@@ -93,7 +93,7 @@ public class VtxApp extends JFrame {
     final JTextArea out=new JTextArea(22,52); final JButton[] tabs=new JButton[3]; final JLabel status=new JLabel(" ");
 
     public VtxApp() {
-        super(APP_NAME+" 2.2.4 — офлайн-генератор"); setDefaultCloseOperation(EXIT_ON_CLOSE); setLayout(new BorderLayout(8,8));
+        super(APP_NAME+" 2.2.6 — офлайн-генератор"); setDefaultCloseOperation(EXIT_ON_CLOSE); setLayout(new BorderLayout(8,8));
         add(collectionPanel(),BorderLayout.WEST); add(centerPanel(),BorderLayout.CENTER); add(status,BorderLayout.SOUTH);
         initCatalog();
         load(); if(configs.isEmpty()) configs.add(new Config()); refreshList(); select(Math.min(idx,configs.size()-1));
@@ -230,11 +230,42 @@ public class VtxApp extends JFrame {
         return card;
     }
     void initCatalog(){
-        Path dir=resolveDataFile().getParent();catalogFile=dir.resolve("vtx_catalog.tsv");photoDir=dir.resolve("photos");
-        try{Files.createDirectories(photoDir);}catch(IOException ex){status.setText(ex.getMessage());}
+        Path dir=resolveDataFile().getParent();
+        Path catalogDir=applicationDirectory().resolve("catalog");
+        catalogFile=catalogDir.resolve("vtx_catalog.tsv");photoDir=catalogDir.resolve("photos");
+        try{
+            Files.createDirectories(photoDir);
+            // One-time migration from the old flat catalog; never overwrite the new catalog.
+            Path oldCatalog=dir.resolve("catalog").resolve("vtx_catalog.tsv");
+            if(!Files.exists(oldCatalog))oldCatalog=dir.resolve("vtx_catalog.tsv");
+            if(!Files.exists(catalogFile)&&Files.exists(oldCatalog)){
+                Path oldPhotos=oldCatalog.getParent().resolve("photos");
+                if(Files.isDirectory(oldPhotos))try(java.util.stream.Stream<Path> images=Files.list(oldPhotos)){
+                    for(Path src:images.filter(Files::isRegularFile).toList()){
+                        Path dest=photoDir.resolve(src.getFileName());
+                        if(!Files.exists(dest))Files.copy(src,dest);
+                    }
+                }
+                String migrated=Files.readString(oldCatalog,StandardCharsets.UTF_8);
+                StringBuilder fixed=new StringBuilder();
+                for(String line:migrated.split("\\R")){
+                    if(line.isBlank())continue;
+                    String[] x=line.split("\\t",-1);
+                    if(x.length==4){
+                        String image=unb64(x[3]);
+                        if(!image.isBlank()){
+                            Path candidate=photoDir.resolve(Path.of(image).getFileName());
+                            if(Files.exists(candidate))x[3]=b64(candidate.toString());
+                        }
+                        fixed.append(String.join("\\t",x)).append('\n');
+                    }
+                }
+                Files.writeString(catalogFile,fixed.toString(),StandardCharsets.UTF_8);
+            }
+        }catch(Exception ex){status.setText("Не вдалося створити каталог біля програми: "+ex.getMessage());JOptionPane.showMessageDialog(this,"Немає доступу до папки програми.\nВстановіть VtxConfig у папку, де маєте право запису, наприклад C:\\VtxConfig.\n"+ex.getMessage(),"Папка каталогу",JOptionPane.ERROR_MESSAGE);}
         if(Files.exists(catalogFile))try{
             for(String line:Files.readAllLines(catalogFile,StandardCharsets.UTF_8)){
-                String[] x=line.split("\t",-1);if(x.length==4)devices.add(new Device(unb64(x[0]),unb64(x[1]),unb64(x[2]),unb64(x[3])));
+                String[] x=line.split("\t",-1);if(x.length==4)devices.add(new Device(unb64(x[0]),unb64(x[1]),unb64(x[2]),resolvePhoto(unb64(x[3]))));
             }
         }catch(Exception ex){status.setText("Помилка каталогу: "+ex.getMessage());}
         if(devices.isEmpty()&&!Files.exists(catalogFile)){
@@ -249,9 +280,26 @@ public class VtxApp extends JFrame {
             saveCatalog();
         }
     }
+    static Path applicationDirectory(){
+        String appPath=System.getProperty("jpackage.app-path", "");
+        if(!appPath.isBlank())return Path.of(appPath).toAbsolutePath().getParent();
+        Path runtime=Path.of(System.getProperty("java.home")).toAbsolutePath();
+        if(runtime.getFileName()!=null && runtime.getFileName().toString().equalsIgnoreCase("runtime"))return runtime.getParent();
+        return Path.of(System.getProperty("user.dir")).toAbsolutePath();
+    }
+    static String portablePhoto(String image){
+        if(image==null||image.isBlank())return "";
+        try{Path p=Path.of(image).toAbsolutePath().normalize();if(p.startsWith(photoDir.toAbsolutePath().normalize()))return "photos/"+p.getFileName();}catch(Exception ignored){}
+        return image;
+    }
+    static String resolvePhoto(String image){
+        if(image==null||image.isBlank())return "";
+        if(image.startsWith("photos/")||image.startsWith("photos\\"))return catalogFile.getParent().resolve(image).normalize().toString();
+        return image;
+    }
     static String b64(String s){return Base64.getEncoder().encodeToString(s.getBytes(StandardCharsets.UTF_8));}
     static String unb64(String s){return new String(Base64.getDecoder().decode(s),StandardCharsets.UTF_8);}
-    void saveCatalog(){try{StringBuilder b=new StringBuilder();for(Device d:devices)b.append(b64(d.maker())).append('\t').append(b64(d.model())).append('\t').append(b64(d.protocol())).append('\t').append(b64(d.image())).append('\n');Files.writeString(catalogFile,b.toString(),StandardCharsets.UTF_8);}catch(IOException ex){error(ex);}}
+    void saveCatalog(){try{StringBuilder b=new StringBuilder();for(Device d:devices)b.append(b64(d.maker())).append('\t').append(b64(d.model())).append('\t').append(b64(d.protocol())).append('\t').append(b64(portablePhoto(d.image()))).append('\n');Files.writeString(catalogFile,b.toString(),StandardCharsets.UTF_8);}catch(IOException ex){error(ex);}}
     static ImageIcon thumbnail(String path,int w,int h){
         if(path==null||path.isBlank())return null;
         try{BufferedImage img=ImageIO.read(Path.of(path).toFile());if(img==null)return null;
@@ -289,6 +337,10 @@ public class VtxApp extends JFrame {
         actions.add(btn("Додати модель",()->{JTextField maker=new JTextField(),name=new JTextField(),proto=new JTextField("Не перевірено");JPanel form=new JPanel(new GridLayout(0,1,3,3));form.add(new JLabel("Виробник:"));form.add(maker);form.add(new JLabel("Модель:"));form.add(name);form.add(new JLabel("Протокол (якщо відомий):"));form.add(proto);if(JOptionPane.showConfirmDialog(dialog,form,"Нова модель",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION)return;if(maker.getText().isBlank()||name.getText().isBlank()){JOptionPane.showMessageDialog(dialog,"Вкажіть виробника й модель");return;}Device d=new Device(maker.getText().trim(),name.getText().trim(),proto.getText().trim(),"");devices.add(d);saveCatalog();model.addElement(d);devList.setSelectedValue(d,true);}));
         actions.add(btn("Додати / замінити фото",()->{Device d=devList.getSelectedValue();if(d==null)return;File chosen=chooseFile(dialog,false,null,"photos");if(chosen==null)return;try{Path source=chosen.toPath();if(ImageIO.read(source.toFile())==null)throw new IOException("Формат зображення не підтримується. Використайте JPG або PNG.");String ext=source.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".png")?".png":".jpg";Path dest=Files.createTempFile(photoDir,"vtx_",ext);Files.copy(source,dest,StandardCopyOption.REPLACE_EXISTING);int pos=devices.indexOf(d);Device updated=new Device(d.maker(),d.model(),d.protocol(),dest.toString());devices.set(pos,updated);int selected=devList.getSelectedIndex();model.set(selected,updated);devList.setSelectedIndex(selected);saveCatalog();refresh.run();updateSelectedPhoto();}catch(Exception ex){JOptionPane.showMessageDialog(dialog,ex.getMessage(),"Помилка фото",JOptionPane.ERROR_MESSAGE);}}));
         actions.add(btn("Видалити модель",()->{Device d=devList.getSelectedValue();if(d==null)return;if(JOptionPane.showConfirmDialog(dialog,"Видалити «"+d+"»?","Підтвердження",JOptionPane.YES_NO_OPTION)!=JOptionPane.YES_OPTION)return;devices.remove(d);model.removeElement(d);saveCatalog();if(selectedVtx.equals(d.toString())){selectedVtx="";store();updateSelectedPhoto();}}));
+        actions.add(btn("Відкрити папку каталогу",()->{
+            try{Desktop.getDesktop().open(catalogFile.getParent().toFile());}
+            catch(Exception ex){JOptionPane.showMessageDialog(dialog,"Каталог: "+catalogFile.getParent()+"\n"+ex.getMessage());}
+        }));
         actions.add(btn("Закрити",dialog::dispose));
         dialog.setLayout(new BorderLayout(8,8));dialog.add(left,BorderLayout.WEST);dialog.add(detail,BorderLayout.CENTER);dialog.add(actions,BorderLayout.SOUTH);if(!model.isEmpty())devList.setSelectedIndex(0);setDarkTheme(true);dialog.setVisible(true);
     }
