@@ -90,7 +90,7 @@ public class VtxApp extends JFrame {
     final JTextArea out=new JTextArea(22,52); final JButton[] tabs=new JButton[3]; final JLabel status=new JLabel(" ");
 
     public VtxApp() {
-        super(APP_NAME+" 2.1.8 — офлайн-генератор"); setDefaultCloseOperation(EXIT_ON_CLOSE); setLayout(new BorderLayout(8,8));
+        super(APP_NAME+" 2.1.9 — офлайн-генератор"); setDefaultCloseOperation(EXIT_ON_CLOSE); setLayout(new BorderLayout(8,8));
         add(collectionPanel(),BorderLayout.WEST); add(centerPanel(),BorderLayout.CENTER); add(status,BorderLayout.SOUTH);
         initCatalog();
         load(); if(configs.isEmpty()) configs.add(new Config()); refreshList(); select(Math.min(idx,configs.size()-1));
@@ -422,7 +422,37 @@ RX — протоколи
         try{selectedId=Integer.parseInt(c.uart.replace("UART",""))-1;}catch(Exception ignored){}
         int selectedMask=ports.getOrDefault(selectedId,-1);
         boolean selectedVtx=(selectedMask&10240)!=0;
-        b.append("\nПОРІВНЯННЯ\n");
+        b.append("\n========== ШВИДКЕ ПОРІВНЯННЯ ==========\n");
+        b.append("Позначки: [OK] збігається  [!] відрізняється  [?] перевірити\n");
+        String expectedRole=c.protocol.startsWith("IRC")?"IRC Tramp":"SmartAudio";
+        int expectedFlag=c.protocol.startsWith("IRC")?8192:2048;
+        if(selectedMask<0)b.append("[?] UART: ").append(c.uart).append(" не знайдено у дампі\n");
+        else if((selectedMask&expectedFlag)!=0)b.append("[OK] UART: ").append(c.uart).append(" / ").append(expectedRole).append("\n");
+        else b.append("[!] UART: ").append(c.uart).append(" у дампі: ")
+            .append((selectedMask&10240)!=0?"інший VTX-протокол":selectedMask==0?"вільний":"інша функція (mask="+selectedMask+")")
+            .append("; у програмі: ").append(expectedRole).append("\n");
+        for(var entry:ports.entrySet())if(entry.getKey()!=selectedId&&(entry.getValue()&10240)!=0)
+            b.append("[!] Інший VTX-порт: UART").append(entry.getKey()+1).append(" (перевірити перед зміною)\n");
+        if(selectedMask>=0&&(selectedMask&65)!=0)b.append("[?] На вибраному UART є MSP або Serial RX: не змінювати автоматично\n");
+        compareSetting(b,"Діапазон",settings.get("vtx_band"),String.valueOf(c.dband));
+        compareSetting(b,"Канал",settings.get("vtx_channel"),String.valueOf(c.dchan));
+        int requestedPower=c.powers[Math.max(0,Math.min(2,2))];
+        compareSetting(b,"Потужність (індекс)",settings.get("vtx_power"),String.valueOf(requestedPower));
+        int bands=-1,channels=-1,powerLevels=-1;
+        for(String t:table){String[] parts=t.split("\\s+");try{
+            if(parts.length>=3&&parts[1].equals("bands"))bands=Integer.parseInt(parts[2]);
+            if(parts.length>=3&&parts[1].equals("channels"))channels=Integer.parseInt(parts[2]);
+            if(parts.length>=3&&parts[1].equals("powerlevels"))powerLevels=Integer.parseInt(parts[2]);
+        }catch(NumberFormatException ignored){}}
+        b.append("[?] VTX-таблиця: дамп ").append(bands<0?"?":bands).append(" діапазонів x ")
+            .append(channels<0?"?":channels).append(" каналів; ").append(powerLevels<0?"?":powerLevels)
+            .append(" рівнів потужності; шаблон програми може мати інші значення\n");
+        b.append("[?] AUX: у дампі ").append(vtxRules.size()).append(" правил; у програмі ")
+            .append(c.steps.size()).append(". Перевірити відповідність каналів і діапазонів\n");
+        b.append("[?] Модель VTX і фізичне підключення не визначаються з дампа\n");
+        b.append("[БЕЗПЕКА] Звіт лише для читання; запис на FC заблоковано\n");
+        b.append("=======================================\n");
+        b.append("\nПОРІВНЯННЯ — ДЕТАЛІ\n");
         if(selectedMask<0)b.append("УВАГА: вибраний порт відсутній у дампі.\n");
         else if(!selectedVtx)b.append("УВАГА: ").append(c.uart).append(" не має функції VTX у цьому дампі.\n");
         else b.append(c.uart).append(" уже має функцію VTX у цьому дампі.\n");
@@ -441,6 +471,12 @@ RX — протоколи
         b.append("модель VTX, його живлення або фізичне підключення TX/RX.\n");
         b.append("ЖОДНИХ команд на FC не надіслано. Кнопка запису заблокована.\n");
         return b.toString();
+    }
+
+    static void compareSetting(StringBuilder b,String label,String actual,String desired){
+        if(actual==null)b.append("[?] ").append(label).append(": у дампі немає значення; у програмі ").append(desired).append('\n');
+        else b.append(actual.equals(desired)?"[OK] ":"[!] ").append(label)
+            .append(": дамп ").append(actual).append(" / програма ").append(desired).append('\n');
     }
 
     void sendToFc(){
