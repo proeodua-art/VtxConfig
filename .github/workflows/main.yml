@@ -36,6 +36,3 @@ jobs:
           name: VtxConfig-2.1.2-Windows-MSI
           path: dist-win/*.msi
           if-no-files-found: error
-
-          path: dist-win/*.msi
-          if-no-files-found: error
