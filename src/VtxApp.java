@@ -21,6 +21,8 @@ public class VtxApp extends JFrame {
     static final String APP_NAME = "VtxConfig";
     static final int JSON_VERSION = 2;
     static final String[] UARTS = {"UART1","UART2","UART3","UART4","UART5","UART6"};
+    static final String DP_MODEL = "Unify Pro32 DP 3W";
+    static boolean isDp(Config c){return c.template.toLowerCase(Locale.ROOT).contains("pro32 dp") || c.selectedVtx.toLowerCase(Locale.ROOT).contains("pro32 dp");}
     static final String[] PROTOCOLS = {"IRC Tramp","TBS SmartAudio 2.0","TBS SmartAudio 2.1"};
     static final String[] AUXES = {"AUX1","AUX2","AUX3","AUX4","AUX5","AUX6","AUX7","AUX8","AUX9","AUX10","AUX11","AUX12"};
     static final String[] BAND_LABEL = {"0 — USER","1 — A","2 — B","3 — E","4 — F","5 — R"};
@@ -91,7 +93,7 @@ public class VtxApp extends JFrame {
     final JTextArea out=new JTextArea(22,52); final JButton[] tabs=new JButton[3]; final JLabel status=new JLabel(" ");
 
     public VtxApp() {
-        super(APP_NAME+" 2.2.2 — офлайн-генератор"); setDefaultCloseOperation(EXIT_ON_CLOSE); setLayout(new BorderLayout(8,8));
+        super(APP_NAME+" 2.2.3 — офлайн-генератор"); setDefaultCloseOperation(EXIT_ON_CLOSE); setLayout(new BorderLayout(8,8));
         add(collectionPanel(),BorderLayout.WEST); add(centerPanel(),BorderLayout.CENTER); add(status,BorderLayout.SOUTH);
         initCatalog();
         load(); if(configs.isEmpty()) configs.add(new Config()); refreshList(); select(Math.min(idx,configs.size()-1));
@@ -147,7 +149,14 @@ public class VtxApp extends JFrame {
     static int auxIndex(String a){try{return Integer.parseInt(a.replace("AUX",""))-1;}catch(Exception e){return 0;}}
     void select(int i){if(i<0||i>=configs.size())return;idx=i;loading=true;Config c=configs.get(i);selectedVtx=c.selectedVtx;fName.setText(c.name);fTemplate.setText(c.template);fUart.setSelectedItem(c.uart);fProtocol.setSelectedItem(c.protocol);fAux.setSelectedItem(c.aux);fBand.setSelectedItem(BAND_LABEL[Math.max(0,Math.min(5,c.dband))]);fChan.setSelectedItem(String.valueOf(c.dchan));sP1.setValue(c.powers[0]);sP2.setValue(c.powers[1]);sP3.setValue(c.powers[2]);fTable.setSelected(c.incTable);fPort.setSelected(c.includePortSetup);for(int r=0;r<6;r++){BandStep s=c.steps.get(r);stAux[r].setSelectedItem(s.aux());stBand[r].setSelectedItem(BAND_LABEL[Math.max(0,Math.min(5,s.band()))]);stChan[r].setSelectedItem(String.valueOf(s.channel()));stStart[r].setValue(s.start());stEnd[r].setValue(s.end());}loading=false;list.setSelectedIndex(i);render();updateSelectedPhoto();}
 
-    String buildCli(Config c){StringBuilder b=new StringBuilder();b.append("# VTX config: ").append(c.name).append('\n');b.append("# template: ").append(c.template.isEmpty()?"—":c.template).append(" | port: ").append(c.uart).append(" | protocol: ").append(c.protocol).append("\n\n");
+    String buildCli(Config c){StringBuilder b=new StringBuilder();
+        if(isDp(c)){
+            b.append("# TBS Unify Pro32 DP 3W — ПОПЕРЕДНІЙ ПЕРЕГЛЯД, НЕ ВСТАВЛЯТИ У CLI\n");
+            b.append("# Підтверджено користувачем: фізичне підключення TX1 / UART1.\n");
+            b.append("# SmartAudio: точну версію та таблицю потужності перевірити за документацією / vtx_info.\n");
+            b.append("# Поточні значення power / AUX можуть належати старому шаблону HV.\n");
+            b.append("# Автоматичний запис і застосування цієї чернетки ЗАБОРОНЕНІ.\n\n");
+        }b.append("# VTX config: ").append(c.name).append('\n');b.append("# template: ").append(c.template.isEmpty()?"—":c.template).append(" | port: ").append(c.uart).append(" | protocol: ").append(c.protocol).append("\n\n");
         if(c.includePortSetup){
             b.append("# PORT SETUP: verified for Betaflight <= 2025.12; this replaces the function mask on the selected port.\n");
             int fn=c.protocol.startsWith("IRC")?8192:2048;
@@ -159,8 +168,12 @@ public class VtxApp extends JFrame {
         b.append("# 6-position band control\n");for(int i=0;i<c.steps.size();i++){BandStep s=c.steps.get(i);b.append("vtx ").append(i).append(' ').append(auxIndex(s.aux())).append(' ').append(s.band()).append(' ').append(s.channel()).append(' ').append(s.band()==0?0:c.powers[Math.min(power,c.powers.length-1)]).append(' ').append(s.start()).append(' ').append(s.end()).append('\n');}
         b.append("\n# power control\n");int base=c.steps.size();b.append("vtx ").append(base).append(' ').append(auxIndex(c.aux)).append(" 0 0 ").append(c.powers[0]).append(" 900 1100\n");b.append("vtx ").append(base+1).append(' ').append(auxIndex(c.aux)).append(" 0 0 ").append(c.powers[1]).append(" 1100 1400\n");b.append("vtx ").append(base+2).append(' ').append(auxIndex(c.aux)).append(" 0 0 ").append(c.powers[2]).append(" 1400 2100\n");b.append("save\n");return b.toString();}
 
-    String buildTableCli(){Config c=collect();StringBuilder b=new StringBuilder();b.append("vtxtable bands 5\nvtxtable channels 8\n");if(c.protocol.startsWith("IRC")){b.append("vtxtable powerlevels 5\nvtxtable powervalues 25 100 200 400 600\nvtxtable powerlabels 25 100 200 400 600\n");}else if(c.protocol.endsWith("2.1")){b.append("# SmartAudio 2.1 power values are model-specific. Query: vtx_info\n# Example only (verify against the VTX manufacturer / vtx_info before use):\n");b.append("vtxtable powerlevels 4\nvtxtable powervalues 14 20 26 30\nvtxtable powerlabels 25 100 400 800").append("\n");}else{b.append("vtxtable powerlevels 4\nvtxtable powervalues 0 1 2 3\nvtxtable powerlabels 25 200 500 800\n");}for(int code=1;code<=5;code++){String l=BAND_LETTER[code-1];b.append("vtxtable band ").append(code).append(" BOSCAM_").append(l).append(' ').append(l).append(" CUSTOM");for(int f:FREQS[code-1])b.append(' ').append(f);b.append('\n');}return b.toString();}
-    String buildTableJson(Config c){StringBuilder b=new StringBuilder();String[] labels=c.protocol.startsWith("IRC")?new String[]{"25","100","200","400","600"}:new String[]{"25","200","500","800"};int[] vals=c.protocol.startsWith("IRC")?new int[]{25,100,200,400,600}:c.protocol.endsWith("2.1")?new int[]{14,20,26,30}:new int[]{0,1,2,3};b.append("{\n  \"description\": \"").append(Json.escape(c.template.isEmpty()?c.name:c.template)).append("\",\n  \"version\": \"1.0\",\n  \"vtx_table\": {\n    \"bands_list\": [\n");for(int code=1;code<=5;code++){String l=BAND_LETTER[code-1];b.append("      { \"name\": \"BOSCAM_").append(l).append("\", \"letter\": \"").append(l).append("\", \"isFactoryBand\": false, \"frequencies\": [");for(int i=0;i<8;i++){if(i>0)b.append(", ");b.append(FREQS[code-1][i]);}b.append("] }").append(code<5?",\n":"\n");}b.append("    ],\n    \"power_levels_list\": [\n");for(int i=0;i<vals.length;i++)b.append("      { \"value\": ").append(vals[i]).append(", \"label\": \"").append(labels[i]).append("\" }").append(i+1<vals.length?",\n":"\n");b.append("    ],\n    \"band\": ").append(c.dband).append(",\n    \"channel\": ").append(c.dchan).append(",\n    \"power_level\": ").append(c.powers[Math.min(power,c.powers.length-1)]).append("\n  }\n}\n");return b.toString();}
+    String buildTableCli(){Config c=collect();StringBuilder b=new StringBuilder();
+        if(isDp(c))return "# TBS Unify Pro32 DP 3W: таблиця потужності НЕ ПІДТВЕРДЖЕНА.\n"+
+            "# Імпортуйте перевірену таблицю з FC або звірте з документацією / vtx_info.\n"+
+            "# Програма навмисно не генерує вигаданих значень потужності.\n";b.append("vtxtable bands 5\nvtxtable channels 8\n");if(c.protocol.startsWith("IRC")){b.append("vtxtable powerlevels 5\nvtxtable powervalues 25 100 200 400 600\nvtxtable powerlabels 25 100 200 400 600\n");}else if(c.protocol.endsWith("2.1")){b.append("# SmartAudio 2.1 power values are model-specific. Query: vtx_info\n# Example only (verify against the VTX manufacturer / vtx_info before use):\n");b.append("vtxtable powerlevels 4\nvtxtable powervalues 14 20 26 30\nvtxtable powerlabels 25 100 400 800").append("\n");}else{b.append("vtxtable powerlevels 4\nvtxtable powervalues 0 1 2 3\nvtxtable powerlabels 25 200 500 800\n");}for(int code=1;code<=5;code++){String l=BAND_LETTER[code-1];b.append("vtxtable band ").append(code).append(" BOSCAM_").append(l).append(' ').append(l).append(" CUSTOM");for(int f:FREQS[code-1])b.append(' ').append(f);b.append('\n');}return b.toString();}
+    String buildTableJson(Config c){StringBuilder b=new StringBuilder();
+        if(isDp(c))return "{\n  \"model\": \"TBS Unify Pro32 DP 3W\",\n  \"verified\": false,\n  \"warning\": \"VTX power table not verified; no deployable table generated\"\n}\n";String[] labels=c.protocol.startsWith("IRC")?new String[]{"25","100","200","400","600"}:new String[]{"25","200","500","800"};int[] vals=c.protocol.startsWith("IRC")?new int[]{25,100,200,400,600}:c.protocol.endsWith("2.1")?new int[]{14,20,26,30}:new int[]{0,1,2,3};b.append("{\n  \"description\": \"").append(Json.escape(c.template.isEmpty()?c.name:c.template)).append("\",\n  \"version\": \"1.0\",\n  \"vtx_table\": {\n    \"bands_list\": [\n");for(int code=1;code<=5;code++){String l=BAND_LETTER[code-1];b.append("      { \"name\": \"BOSCAM_").append(l).append("\", \"letter\": \"").append(l).append("\", \"isFactoryBand\": false, \"frequencies\": [");for(int i=0;i<8;i++){if(i>0)b.append(", ");b.append(FREQS[code-1][i]);}b.append("] }").append(code<5?",\n":"\n");}b.append("    ],\n    \"power_levels_list\": [\n");for(int i=0;i<vals.length;i++)b.append("      { \"value\": ").append(vals[i]).append(", \"label\": \"").append(labels[i]).append("\" }").append(i+1<vals.length?",\n":"\n");b.append("    ],\n    \"band\": ").append(c.dband).append(",\n    \"channel\": ").append(c.dchan).append(",\n    \"power_level\": ").append(c.powers[Math.min(power,c.powers.length-1)]).append("\n  }\n}\n");return b.toString();}
     void setView(int k){view=k;for(int i=0;i<3;i++)tabs[i].setEnabled(i!=k);render();}void render(){Config c=collect();out.setText(view==1?buildTableCli():view==2?buildTableJson(c):buildCli(c));out.setCaretPosition(0);}
 
     void refreshList(){listModel.clear();for(Config c:configs)listModel.addElement(c.name);}void store(){if(loading||idx<0||idx>=configs.size())return;configs.set(idx,collect());persist();loading=true;int s=idx;refreshList();list.setSelectedIndex(s);loading=false;}
@@ -229,6 +242,10 @@ public class VtxApp extends JFrame {
             devices.add(new Device("SpeedyBee","Вкажіть модель","Перевірити за документацією",""));
             saveCatalog();
         }
+        if(devices.stream().noneMatch(d->d.maker().equals("TBS") && d.model().equals(DP_MODEL))){
+            devices.add(new Device("TBS",DP_MODEL,"TBS SmartAudio (version to verify)",""));
+            saveCatalog();
+        }
     }
     static String b64(String s){return Base64.getEncoder().encodeToString(s.getBytes(StandardCharsets.UTF_8));}
     static String unb64(String s){return new String(Base64.getDecoder().decode(s),StandardCharsets.UTF_8);}
@@ -259,7 +276,14 @@ public class VtxApp extends JFrame {
         devList.addListSelectionListener(e->{if(!e.getValueIsAdjusting())refresh.run();});
         search.getDocument().addDocumentListener(new SimpleDoc(()->{String q=search.getText().toLowerCase(Locale.ROOT);model.clear();for(Device d:devices)if(d.toString().toLowerCase(Locale.ROOT).contains(q))model.addElement(d);}));
         JPanel actions=new JPanel(new FlowLayout(FlowLayout.LEFT,6,6));
-        actions.add(btn("Обрати для конфігурації",()->{Device d=devList.getSelectedValue();if(d==null)return;selectedVtx=d.toString();fTemplate.setText(d.model());store();updateSelectedPhoto();dialog.dispose();}));
+        actions.add(btn("Обрати для конфігурації",()->{Device d=devList.getSelectedValue();if(d==null)return;selectedVtx=d.toString();loading=true;fTemplate.setText(d.model());
+            if(d.maker().equals("TBS")&&d.model().equals(DP_MODEL)){
+                fUart.setSelectedItem("UART1");fProtocol.setSelectedItem("TBS SmartAudio 2.1");
+                fTable.setSelected(false);fPort.setSelected(false);
+            }
+            loading=false;store();updateSelectedPhoto();dialog.dispose();
+            if(d.maker().equals("TBS")&&d.model().equals(DP_MODEL))
+                JOptionPane.showMessageDialog(this,"Профіль TBS Unify Pro32 DP 3W обрано.\nUART1 (TX1), SmartAudio 2.1 — перевірити версію за VTX.\nАвтоматичну VTX-таблицю і команди порту вимкнено:\nрівні потужності треба звірити з vtx_info або інструкцією.\nЖодних команд на FC не відправлено.","Профіль DP 3W — безпечний режим",JOptionPane.INFORMATION_MESSAGE);}));
         actions.add(btn("Додати модель",()->{JTextField maker=new JTextField(),name=new JTextField(),proto=new JTextField("Не перевірено");JPanel form=new JPanel(new GridLayout(0,1,3,3));form.add(new JLabel("Виробник:"));form.add(maker);form.add(new JLabel("Модель:"));form.add(name);form.add(new JLabel("Протокол (якщо відомий):"));form.add(proto);if(JOptionPane.showConfirmDialog(dialog,form,"Нова модель",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION)return;if(maker.getText().isBlank()||name.getText().isBlank()){JOptionPane.showMessageDialog(dialog,"Вкажіть виробника й модель");return;}Device d=new Device(maker.getText().trim(),name.getText().trim(),proto.getText().trim(),"");devices.add(d);saveCatalog();model.addElement(d);devList.setSelectedValue(d,true);}));
         actions.add(btn("Додати / замінити фото",()->{Device d=devList.getSelectedValue();if(d==null)return;File chosen=chooseFile(dialog,false,null,"photos");if(chosen==null)return;try{Path source=chosen.toPath();if(ImageIO.read(source.toFile())==null)throw new IOException("Формат зображення не підтримується. Використайте JPG або PNG.");String ext=source.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".png")?".png":".jpg";Path dest=Files.createTempFile(photoDir,"vtx_",ext);Files.copy(source,dest,StandardCopyOption.REPLACE_EXISTING);int pos=devices.indexOf(d);Device updated=new Device(d.maker(),d.model(),d.protocol(),dest.toString());devices.set(pos,updated);int selected=devList.getSelectedIndex();model.set(selected,updated);devList.setSelectedIndex(selected);saveCatalog();refresh.run();updateSelectedPhoto();}catch(Exception ex){JOptionPane.showMessageDialog(dialog,ex.getMessage(),"Помилка фото",JOptionPane.ERROR_MESSAGE);}}));
         actions.add(btn("Видалити модель",()->{Device d=devList.getSelectedValue();if(d==null)return;if(JOptionPane.showConfirmDialog(dialog,"Видалити «"+d+"»?","Підтвердження",JOptionPane.YES_NO_OPTION)!=JOptionPane.YES_OPTION)return;devices.remove(d);model.removeElement(d);saveCatalog();if(selectedVtx.equals(d.toString())){selectedVtx="";store();updateSelectedPhoto();}}));
