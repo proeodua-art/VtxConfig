@@ -34,26 +34,26 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          jpackage --type app-image --name VtxConfig --input package-input --main-jar VtxConfig.jar --dest dist-portable --app-version 2.3.2 --icon assets/vtx-icon.ico --java-options '-Xmx512m'
+          jpackage --type app-image --name VtxConfig --input package-input --main-jar VtxConfig.jar --dest dist-portable --app-version 2.3.3 --icon assets/vtx-icon.ico --java-options '-Xmx512m'
           if ($LASTEXITCODE -ne 0) { throw 'Portable app build failed' }
           if (!(Test-Path dist-portable/VtxConfig/VtxConfig.exe)) { throw 'Missing VtxConfig.exe' }
           # Keep the editable catalog beside VtxConfig.exe as requested.
           Copy-Item package-input/catalog dist-portable/VtxConfig/catalog -Recurse -Force
-          Compress-Archive -Path dist-portable/VtxConfig -DestinationPath VtxConfig-2.3.2-Portable-Windows.zip -CompressionLevel Optimal
+          Compress-Archive -Path dist-portable/VtxConfig -DestinationPath VtxConfig-2.3.3-Portable-Windows.zip -CompressionLevel Optimal
       - uses: actions/upload-artifact@v4
         with:
-          name: VtxConfig-2.3.2-Portable-Windows
-          path: VtxConfig-2.3.2-Portable-Windows.zip
+          name: VtxConfig-2.3.3-Portable-Windows
+          path: VtxConfig-2.3.3-Portable-Windows.zip
           if-no-files-found: error
       - name: Try MSI build (optional)
         continue-on-error: true
         shell: pwsh
         run: |
-          jpackage --type msi --name VtxConfig --input package-input --main-jar VtxConfig.jar --dest dist-win --app-version 2.3.2 --win-shortcut --win-menu --win-dir-chooser --icon assets/vtx-icon.ico --java-options '-Xmx512m' --verbose
+          jpackage --type msi --name VtxConfig --input package-input --main-jar VtxConfig.jar --dest dist-win --app-version 2.3.3 --win-shortcut --win-menu --win-dir-chooser --icon assets/vtx-icon.ico --java-options '-Xmx512m' --verbose
           if ($LASTEXITCODE -ne 0) { Write-Warning "MSI failed with code $LASTEXITCODE; portable ZIP is already uploaded." }
       - uses: actions/upload-artifact@v4
         if: ${{ hashFiles('dist-win/*.msi') != '' }}
         with:
-          name: VtxConfig-2.3.2-Windows-MSI
+          name: VtxConfig-2.3.3-Windows-MSI
           path: dist-win/*.msi
           if-no-files-found: ignore
