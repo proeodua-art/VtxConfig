@@ -98,7 +98,7 @@ public class VtxApp extends JFrame {
     final JTextArea out=new JTextArea(22,52); final JButton[] tabs=new JButton[3]; final JLabel status=new JLabel(" ");
 
     public VtxApp() {
-        super(APP_NAME+" 2.3.4 — офлайн-генератор"); setDefaultCloseOperation(EXIT_ON_CLOSE); setLayout(new BorderLayout(8,8));
+        super(APP_NAME+" 2.3.5 — офлайн-генератор"); setDefaultCloseOperation(EXIT_ON_CLOSE); setLayout(new BorderLayout(8,8));
         add(topToolbar(),BorderLayout.NORTH); add(centerPanel(),BorderLayout.CENTER); add(status,BorderLayout.SOUTH);
         installWindowIcon();
         list.addListSelectionListener(e->{if(!e.getValueIsAdjusting()&&!loading&&list.getSelectedIndex()>=0)select(list.getSelectedIndex());});
@@ -156,7 +156,7 @@ public class VtxApp extends JFrame {
         rightTop.add(fcBar,BorderLayout.SOUTH);
         right.add(rightTop,BorderLayout.NORTH);
         out.setFont(new Font(Font.MONOSPACED,Font.PLAIN,12)); out.setEditable(false); right.add(new JScrollPane(out),BorderLayout.CENTER);
-        JPanel rb=new JPanel(new FlowLayout(FlowLayout.LEFT,4,4)); rb.add(btn("Копіювати",this::copyOut)); rb.add(btn("Зберегти файл",this::saveCurrent)); rb.add(btn("Зберегти всі три",this::saveAllThree)); rb.add(btn("Темна тема",()->setDarkTheme(true))); rb.add(btn("Світла тема",()->setDarkTheme(false))); right.add(rb,BorderLayout.SOUTH);
+        JPanel rb=new JPanel(new FlowLayout(FlowLayout.LEFT,4,4)); rb.add(btn("Копіювати",this::copyOut)); rb.add(btn("Зберегти файл",this::saveCurrent)); rb.add(btn("Зберегти всі три",this::saveAllThree)); right.add(rb,BorderLayout.SOUTH);
         JPanel c=new JPanel(new GridLayout(1,2,8,8)); c.add(mid); c.add(right); return c;
     }
     JPanel form(){
@@ -1163,6 +1163,7 @@ try {
         UIManager.put("TextArea.caretForeground",new javax.swing.plaf.ColorUIResource(fg));
     }
     void setDarkTheme(boolean dark){
+        dark=true; // Єдина підтримувана тема: чорно-графітова.
         Color bg=dark?new Color(12,12,12):UIManager.getColor("Panel.background");
         Color fg=dark?new Color(242,246,252):UIManager.getColor("Label.foreground");
         for(Window w:Window.getWindows())applyColors(w,bg,fg,dark);
