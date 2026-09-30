@@ -98,9 +98,10 @@ public class VtxApp extends JFrame {
     final JTextArea out=new JTextArea(22,52); final JButton[] tabs=new JButton[3]; final JLabel status=new JLabel(" ");
 
     public VtxApp() {
-        super(APP_NAME+" 2.3.3 — офлайн-генератор"); setDefaultCloseOperation(EXIT_ON_CLOSE); setLayout(new BorderLayout(8,8));
-        add(collectionPanel(),BorderLayout.WEST); add(centerPanel(),BorderLayout.CENTER); add(status,BorderLayout.SOUTH);
+        super(APP_NAME+" 2.3.4 — офлайн-генератор"); setDefaultCloseOperation(EXIT_ON_CLOSE); setLayout(new BorderLayout(8,8));
+        add(topToolbar(),BorderLayout.NORTH); add(centerPanel(),BorderLayout.CENTER); add(status,BorderLayout.SOUTH);
         installWindowIcon();
+        list.addListSelectionListener(e->{if(!e.getValueIsAdjusting()&&!loading&&list.getSelectedIndex()>=0)select(list.getSelectedIndex());});
         initCatalog();
         load(); if(configs.isEmpty()) configs.add(new Config()); refreshList(); select(Math.min(idx,configs.size()-1));
         setSize(1450,850); setLocationRelativeTo(null); setMinimumSize(new Dimension(1120,740)); updateSelectedPhoto();
@@ -112,11 +113,31 @@ public class VtxApp extends JFrame {
         }catch(IOException ignored){}
     }
 
-    JPanel collectionPanel(){
-        JPanel left=new JPanel(new BorderLayout(5,5)); left.setBorder(new TitledBorder("Мої конфігурації")); left.setPreferredSize(new Dimension(225,640));
-        list.setSelectionMode(ListSelectionModel.SINGLE_SELECTION); list.addListSelectionListener(e->{if(!e.getValueIsAdjusting()&&!loading&&list.getSelectedIndex()>=0)select(list.getSelectedIndex());});
-        left.add(new JScrollPane(list),BorderLayout.CENTER);
-        JPanel b=new JPanel(new GridLayout(3,2,4,4)); b.add(btn("Нова",this::newCfg)); b.add(btn("Дубль",this::dupCfg)); b.add(btn("Видалити",this::delCfg)); b.add(btn("Експорт",this::exportAll)); b.add(btn("Імпорт",this::importAll)); b.add(btn("Тека даних",this::openDataDir)); left.add(b,BorderLayout.SOUTH); return left;
+    // Keep configuration management accessible without taking permanent screen space.
+    JPanel topToolbar(){
+        JPanel bar=new JPanel(new FlowLayout(FlowLayout.LEFT,10,7));
+        bar.add(btn("Мої конфігурації",this::showConfigurations));
+        bar.add(btn("Каталог VTX",this::showCatalog));
+        return bar;
+    }
+    void showConfigurations(){
+        JDialog dialog=new JDialog(this,"Мої конфігурації",true);
+        dialog.setLayout(new BorderLayout(8,8));
+        JPanel panel=new JPanel(new BorderLayout(8,8));
+        panel.setBorder(BorderFactory.createEmptyBorder(12,12,12,12));
+        list.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+        // The same list model and selection handler are reused for all configurations.
+        panel.add(new JScrollPane(list),BorderLayout.CENTER);
+        JPanel buttons=new JPanel(new GridLayout(2,3,7,7));
+        buttons.add(btn("Нова",this::newCfg));buttons.add(btn("Дубль",this::dupCfg));
+        buttons.add(btn("Видалити",this::delCfg));buttons.add(btn("Експорт",this::exportAll));
+        buttons.add(btn("Імпорт",this::importAll));buttons.add(btn("Тека даних",this::openDataDir));
+        panel.add(buttons,BorderLayout.SOUTH);
+        dialog.add(panel,BorderLayout.CENTER);
+        dialog.add(btn("Закрити",dialog::dispose),BorderLayout.SOUTH);
+        dialog.setSize(540,520);dialog.setMinimumSize(new Dimension(430,400));
+        dialog.setLocationRelativeTo(this);
+        setDarkTheme(true);dialog.setVisible(true);
     }
     JPanel centerPanel(){
         JPanel mid=new JPanel(new BorderLayout(5,5)); mid.setBorder(new TitledBorder("Параметри")); JPanel top=new JPanel(new BorderLayout(6,6));top.add(selectedPanel(),BorderLayout.NORTH);top.add(form(),BorderLayout.CENTER);mid.add(top,BorderLayout.NORTH); mid.add(stepsTable(),BorderLayout.CENTER);
@@ -424,22 +445,22 @@ public class VtxApp extends JFrame {
         selectedPhoto.setIcon(icon);selectedPhoto.setText(icon==null?"Немає фото":"");
     }
     void showCatalog(){
-        JDialog dialog=new JDialog(this,"Каталог VTX — фотографії",true);dialog.setSize(1120,730);dialog.setMinimumSize(new Dimension(850,550));dialog.setLocationRelativeTo(this);
+        JDialog dialog=new JDialog(this,"Каталог VTX — фотографії",true);dialog.setSize(1280,820);dialog.setMinimumSize(new Dimension(900,610));dialog.setLocationRelativeTo(this);
         DefaultListModel<Device> model=new DefaultListModel<>();for(Device d:devices)model.addElement(d);
         JList<Device> devList=new JList<>(model);devList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
         JTextField search=new JTextField();search.setToolTipText("Виробник, модель або протокол");
         JPanel left=new JPanel(new BorderLayout(8,8));left.setBorder(BorderFactory.createEmptyBorder(12,12,12,8));
         JPanel searchPanel=new JPanel(new BorderLayout(4,4));searchPanel.add(new JLabel("ПОШУК VTX"),BorderLayout.NORTH);searchPanel.add(search,BorderLayout.CENTER);
         JLabel resultCount=new JLabel("Знайдено моделей: "+model.size());searchPanel.add(resultCount,BorderLayout.SOUTH);
-        left.add(searchPanel,BorderLayout.NORTH);left.add(new JScrollPane(devList),BorderLayout.CENTER);left.setPreferredSize(new Dimension(330,500));
+        left.add(searchPanel,BorderLayout.NORTH);left.add(new JScrollPane(devList),BorderLayout.CENTER);left.setPreferredSize(new Dimension(340,500));
         JLabel image=new JLabel("Оберіть передавач",SwingConstants.CENTER);image.setOpaque(true);image.putClientProperty("vtx.whitePhoto",Boolean.TRUE);image.setBackground(Color.WHITE);image.setForeground(new Color(70,70,70));
-        JPanel photoFrame=new JPanel(new BorderLayout());photoFrame.setBorder(BorderFactory.createEmptyBorder(10,10,10,10));photoFrame.add(image,BorderLayout.CENTER);
+        JPanel photoFrame=new JPanel(new BorderLayout());photoFrame.setBorder(BorderFactory.createEmptyBorder(4,4,4,4));photoFrame.setBackground(new Color(24,24,24));photoFrame.add(image,BorderLayout.CENTER);
         JLabel title=new JLabel("Оберіть передавач");title.setFont(title.getFont().deriveFont(Font.BOLD,20f));
         JLabel maker=new JLabel("Виробник: —"),proto=new JLabel("Протокол: —"),photoStatus=new JLabel("Фото: —");
         JPanel metadata=new JPanel(new GridLayout(0,1,4,5));metadata.setBorder(BorderFactory.createEmptyBorder(12,14,12,14));metadata.add(title);metadata.add(maker);metadata.add(proto);metadata.add(photoStatus);
         JPanel detail=new JPanel(new BorderLayout(6,6));detail.setBorder(BorderFactory.createEmptyBorder(12,8,12,12));detail.add(photoFrame,BorderLayout.CENTER);detail.add(metadata,BorderLayout.SOUTH);
         Runnable refresh=()->{Device d=devList.getSelectedValue();if(d==null){image.setIcon(null);image.setText("Оберіть VTX");title.setText("Оберіть передавач");maker.setText("Виробник: —");proto.setText("Протокол: —");photoStatus.setText("Фото: —");return;}
-            int w=Math.max(300,image.getWidth()-24),h=Math.max(220,image.getHeight()-24);ImageIcon icon=thumbnail(d.image(),w,h);image.setIcon(icon);image.setText(icon==null?"Фото ще не додано":"");title.setText(d.model());maker.setText("Виробник: "+d.maker());proto.setText("Протокол: "+d.protocol());photoStatus.setText(icon==null?"Фото: відсутнє":"Фото: локальний каталог");};
+            int w=Math.max(400,image.getWidth()-8),h=Math.max(300,image.getHeight()-8);ImageIcon icon=thumbnail(d.image(),w,h);image.setIcon(icon);image.setText(icon==null?"Фото ще не додано":"");title.setText(d.model());maker.setText("Виробник: "+d.maker());proto.setText("Протокол: "+d.protocol());photoStatus.setText(icon==null?"Фото: відсутнє":"Фото: локальний каталог");};
         devList.addListSelectionListener(e->{if(!e.getValueIsAdjusting())refresh.run();});
         image.addComponentListener(new java.awt.event.ComponentAdapter(){public void componentResized(java.awt.event.ComponentEvent e){if(devList.getSelectedValue()!=null)refresh.run();}});
         search.getDocument().addDocumentListener(new SimpleDoc(()->{String q=search.getText().trim().toLowerCase(Locale.ROOT);Device selected=devList.getSelectedValue();model.clear();for(Device d:devices)if((d.toString()+" "+d.protocol()).toLowerCase(Locale.ROOT).contains(q))model.addElement(d);resultCount.setText("Знайдено моделей: "+model.size());if(selected!=null&&model.contains(selected))devList.setSelectedValue(selected,true);else if(!model.isEmpty())devList.setSelectedIndex(0);else refresh.run();}));
@@ -450,7 +471,7 @@ public class VtxApp extends JFrame {
         actions.add(btn("Видалити модель",()->{Device d=devList.getSelectedValue();if(d==null)return;if(JOptionPane.showConfirmDialog(dialog,"Видалити «"+d+"»?","Підтвердження",JOptionPane.YES_NO_OPTION)!=JOptionPane.YES_OPTION)return;devices.remove(d);model.removeElement(d);saveCatalog();if(selectedVtx.equals(d.toString())){selectedVtx="";store();updateSelectedPhoto();}}));
         actions.add(btn("Відкрити папку каталогу",()->{try{Desktop.getDesktop().open(catalogFile.getParent().toFile());}catch(Exception ex){JOptionPane.showMessageDialog(dialog,"Каталог: "+catalogFile.getParent()+"\n"+ex.getMessage());}}));
         actions.add(btn("Закрити",dialog::dispose));
-        dialog.setLayout(new BorderLayout(8,8));dialog.add(left,BorderLayout.WEST);dialog.add(detail,BorderLayout.CENTER);dialog.add(actions,BorderLayout.SOUTH);if(!model.isEmpty())devList.setSelectedIndex(0);setDarkTheme(true);image.setBackground(Color.WHITE);image.setForeground(new Color(70,70,70));dialog.setVisible(true);
+        dialog.setLayout(new BorderLayout(8,8));dialog.add(left,BorderLayout.WEST);dialog.add(detail,BorderLayout.CENTER);dialog.add(actions,BorderLayout.SOUTH);if(!model.isEmpty())devList.setSelectedIndex(0);setDarkTheme(true);image.setBackground(Color.WHITE);image.setForeground(new Color(70,70,70));photoFrame.setBackground(new Color(24,24,24));dialog.setVisible(true);
     }
     static String html(String s){return s.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;");}
     static final String CATALOG="""
